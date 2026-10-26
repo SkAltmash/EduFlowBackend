@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-// Append-only record of every super admin action.
+// Append-only record of super admin actions and of team changes made by school owners/admins.
 const auditLogSchema = new mongoose.Schema(
   {
     actorId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },

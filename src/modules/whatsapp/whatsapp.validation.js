@@ -13,6 +13,14 @@ const refSchemas = {
   attendance_summary: z.object({ studentId: objectId, month }),
   exam_result: z.object({ examId: objectId, studentId: objectId }),
   progress_report: z.object({ studentId: objectId, month }),
+  // The leaderboard the rank comes from: a period, optionally one class
+  performance_report: z.object({
+    studentId: objectId,
+    from: day,
+    to: day,
+    grade: z.string().trim().max(50).optional(),
+    section: z.string().trim().max(20).optional(),
+  }),
 };
 
 const batch = z

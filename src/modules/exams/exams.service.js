@@ -6,6 +6,7 @@ import Student from "../../models/Student.js";
 import Attendance from "../../models/Attendance.js";
 import Tenant from "../../models/Tenant.js";
 import AppError from "../../utils/AppError.js";
+import { loadClassList } from "../academics/class-names.js";
 import { DEFAULT_GRADING, SCALES, assignRanks, classStats, computeResult, letterGrade } from "./exams.grading.js";
 
 const COLLATION = { locale: "en", numericOrdering: true };
@@ -147,7 +148,15 @@ export async function listExams(tenantId, { page, limit, grade, section, month, 
   };
 }
 
-export async function createExam(tenantId, userId, data) {
+/** The school's spelling of the class, or a 400 if it isn't in the class list. */
+async function canonicalClass(tenantId, grade, section) {
+  const r = (await loadClassList(tenantId)).resolve(grade, section);
+  if (r.error || !r.grade) throw AppError.badRequest(r.error?.message ?? "Choose a class", "INVALID_CLASS", [r.error ?? { field: "grade", message: "Choose a class" }]);
+  return { grade: r.grade, section: r.section };
+}
+
+export async function createExam(tenantId, userId, input) {
+  const data = { ...input, ...(await canonicalClass(tenantId, input.grade, input.section)) };
   const exam = await Exam.create({ ...data, subjects: data.subjects.map(({ _id, ...s }) => s), tenantId, createdBy: userId });
   return getExam(tenantId, exam._id);
 }
@@ -162,6 +171,9 @@ export async function getExam(tenantId, id) {
 export async function updateExam(tenantId, id, data) {
   const exam = await Exam.findOne({ _id: id, tenantId });
   if (!exam) throw AppError.notFound("Test not found");
+  if (data.grade !== undefined || data.section !== undefined) {
+    Object.assign(data, await canonicalClass(tenantId, data.grade ?? exam.grade, data.section ?? exam.section));
+  }
 
   if (data.subjects) {
     const kept = new Set(data.subjects.filter((s) => s._id).map((s) => s._id));

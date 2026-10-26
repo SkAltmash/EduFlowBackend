@@ -54,3 +54,11 @@ export async function logout(req, res) {
 export async function me(req, res) {
   res.json(await authService.getCurrentUser(req.user));
 }
+
+export async function updateMe(req, res) {
+  res.json(await authService.updateMe(req.user, req.body));
+}
+
+export async function changePassword(req, res) {
+  res.json(await authService.changePassword(req.user, req.body, req.cookies?.[REFRESH_COOKIE_NAME]));
+}

@@ -45,3 +45,14 @@ export const loginSchema = z.object({
 export const selectTenantSchema = z.object({
   tenantId: objectId,
 });
+
+export const updateMeSchema = z.object({
+  name: z.string({ error: "Name is required" }).trim().min(2, "Name must be at least 2 characters").max(100, "Name must be at most 100 characters"),
+});
+
+export const changePasswordSchema = z
+  .object({
+    currentPassword: z.string({ error: "Current password is required" }).min(1, "Current password is required").max(200),
+    newPassword: strongPassword,
+  })
+  .refine((v) => v.currentPassword !== v.newPassword, { message: "Choose a password different from the current one", path: ["newPassword"] });

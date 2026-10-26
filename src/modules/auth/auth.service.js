@@ -399,3 +399,45 @@ export async function getCurrentUser({ id, tenantId, isImpersonating }) {
     role: membership.role,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Own account
+// ---------------------------------------------------------------------------
+
+function assertOwnAccount({ isImpersonating }) {
+  // A super admin inside a school is using someone else's workspace, not their own account
+  if (isImpersonating) throw AppError.forbidden("Super admin accounts are managed with `npm run superadmin`", "SUPER_ADMIN_PROTECTED");
+}
+
+export async function updateMe(actor, { name }) {
+  assertOwnAccount(actor);
+  const user = await User.findByIdAndUpdate(actor.id, { $set: { name } }, { returnDocument: "after" });
+  if (!user) throw AppError.notFound("User not found");
+  return { user: serializeUser(user) };
+}
+
+/** Changes the password and signs out every other device; the current one stays signed in. */
+export async function changePassword(actor, { currentPassword, newPassword }, currentRefreshToken) {
+  assertOwnAccount(actor);
+  const user = await User.findById(actor.id).select("+passwordHash");
+  if (!user) throw AppError.notFound("User not found");
+  if (!(await verifyPassword(currentPassword, user.passwordHash))) {
+    throw AppError.badRequest("Current password is incorrect", "WRONG_PASSWORD", [{ field: "currentPassword", message: "Current password is incorrect" }]);
+  }
+
+  user.passwordHash = await hashPassword(newPassword);
+  await user.save();
+
+  let keep = null;
+  try {
+    const payload = verifyRefreshToken(currentRefreshToken);
+    if (payload.sub === String(user._id)) keep = payload.sid;
+  } catch {
+    // No valid cookie: sign out everywhere
+  }
+  const { modifiedCount } = await Session.updateMany(
+    { userId: user._id, revokedAt: null, ...(keep ? { _id: { $ne: keep } } : {}) },
+    { $set: { revokedAt: new Date() } }
+  );
+  return { signedOutSessions: modifiedCount };
+}

@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import Student from "../../models/Student.js";
 import AppError from "../../utils/AppError.js";
 import { createStudentSchema } from "./students.validation.js";
+import { loadClassList } from "../academics/class-names.js";
 
 // Natural ordering for values like "Grade 2" < "Grade 10" and "A-9" < "A-10"
 const COLLATION = { locale: "en", numericOrdering: true };
@@ -48,6 +49,7 @@ export function serializeStudent(s) {
     admissionDate: s.admissionDate ?? null,
     status: s.status,
     notes: s.notes || "",
+    classHistory: (s.classHistory ?? []).map((h) => ({ year: h.year, grade: h.grade, section: h.section || "", rollNo: h.rollNo || "", outcome: h.outcome })),
     createdAt: s.createdAt,
     updatedAt: s.updatedAt,
   };
@@ -72,6 +74,20 @@ function compact(data) {
 
 function isDuplicateKey(err) {
   return err?.code === 11000;
+}
+
+/**
+ * Puts the class and section into the school's spelling ("class v" → "5", "a" → "A"),
+ * or throws when they aren't in the class list. `current` fills in whichever of the two
+ * an update leaves out.
+ */
+function applyClass(classList, data, current = {}) {
+  if (data.grade === undefined && data.section === undefined) return data;
+  const grade = data.grade !== undefined ? data.grade ?? "" : current.grade ?? "";
+  const section = data.section !== undefined ? data.section ?? "" : current.section ?? "";
+  const r = classList.resolve(grade, section);
+  if (r.error) throw AppError.badRequest(r.error.message, "INVALID_CLASS", [r.error]);
+  return { ...data, grade: r.grade, section: r.section };
 }
 
 async function findStudentOrThrow(tenantId, id) {
@@ -138,10 +154,11 @@ export async function exportStudents(tenantId, { sort, ...filters }) {
 /** Distinct grades/sections (for filter dropdowns) and counts per status. */
 export async function getStudentFilters(tenantId) {
   const tid = new mongoose.Types.ObjectId(String(tenantId));
-  const [grades, sections, byStatus] = await Promise.all([
+  const [grades, sections, byStatus, classList] = await Promise.all([
     Student.distinct("grade", { tenantId: tid }),
     Student.distinct("section", { tenantId: tid }),
     Student.aggregate([{ $match: { tenantId: tid } }, { $group: { _id: "$status", count: { $sum: 1 } } }]),
+    loadClassList(tenantId),
   ]);
 
   const sortNatural = (values) =>
@@ -149,7 +166,8 @@ export async function getStudentFilters(tenantId) {
   const counts = Object.fromEntries(byStatus.map((s) => [s._id, s.count]));
 
   return {
-    grades: sortNatural(grades),
+    // In the school's class order (Nursery, LKG, 1, 2 …)
+    grades: grades.filter(Boolean).sort(classList.compareGrades),
     sections: sortNatural(sections),
     counts: { total: byStatus.reduce((n, s) => n + s.count, 0), ...counts },
   };
@@ -163,7 +181,8 @@ export async function getStudent(tenantId, id) {
 // Mutations
 // ---------------------------------------------------------------------------
 
-export async function createStudent(tenantId, userId, data) {
+export async function createStudent(tenantId, userId, input) {
+  const data = applyClass(await loadClassList(tenantId), input);
   try {
     const student = await Student.create({ ...compact(data), tenantId, createdBy: userId, updatedBy: userId });
     return { student: serializeStudent(student) };
@@ -173,8 +192,9 @@ export async function createStudent(tenantId, userId, data) {
   }
 }
 
-export async function updateStudent(tenantId, userId, id, data) {
-  await findStudentOrThrow(tenantId, id);
+export async function updateStudent(tenantId, userId, id, input) {
+  const existing = await findStudentOrThrow(tenantId, id);
+  const data = applyClass(await loadClassList(tenantId), input, existing);
   const { $set, $unset } = toUpdate(data);
 
   try {
@@ -204,6 +224,7 @@ export async function importStudents(tenantId, userId, { students: rows, onDupli
   const failed = [];
   const valid = [];
   const seen = new Set();
+  const classList = await loadClassList(tenantId);
 
   rows.forEach((raw, index) => {
     const row = index + 1;
@@ -216,6 +237,14 @@ export async function importStudents(tenantId, userId, { students: rows, onDupli
       });
       return;
     }
+    // "Class V" in the file → "5" from the class list
+    const cls = classList.resolve(result.data.grade, result.data.section);
+    if (cls.error) {
+      failed.push({ row, admissionNo: result.data.admissionNo, errors: [cls.error] });
+      return;
+    }
+    result.data.grade = cls.grade;
+    result.data.section = cls.section;
     const key = result.data.admissionNo.toLowerCase();
     if (seen.has(key)) {
       failed.push({

@@ -27,6 +27,12 @@ export const TEMPLATES = {
     body: "Dear {{1}}, progress report of {{2}} for {{3}}: tests {{4}}. Average {{5}}, grade {{6}}. Attendance {{7}}. Regards, {{8}}.",
     example: ["Mr. Sharma", "Aarav Sharma", "October 2026", "Unit Test 1 83%, Maths Weekly 90%", "86.5%", "A2", "90.9% (20 of 22 days)", "Sunrise Public School"],
   },
+  performance_report: {
+    title: "Performance report",
+    suggestedName: "performance_report",
+    body: "Dear {{1}}, performance report of {{2}} ({{3}}) for {{4}}: {{5}}. Average marks {{6}}, attendance {{7}}. {{8}} Regards, {{9}}.",
+    example: ["Mr. Sharma", "Aarav Sharma", "Class 5 - A", "1 Oct to 26 Oct 2026", "rank 3rd of 30 in class, 5th of 120 in school", "86.3% (grade A2, 3 tests)", "100% (22 of 22 days)", "Best: Unit Test 1 at 92%.", "Sunrise Public School"],
+  },
   fee_receipt: {
     title: "Fee receipt",
     suggestedName: "fee_receipt",
@@ -221,5 +227,49 @@ export function progressReport({ school, guardianName, report }) {
       att,
       school,
     ],
+  };
+}
+
+const ordinal = (n) => {
+  const v = n % 100;
+  return `${n}${["th", "st", "nd", "rd"][(v - 20) % 10] ?? ["th", "st", "nd", "rd"][v] ?? "th"}`;
+};
+
+/**
+ * row: one student from performance.leaderboard(); classSize: ranked students in their class;
+ * ranked: ranked students in the whole leaderboard (school or the filtered class).
+ */
+export function performanceReport({ school, guardianName, row, period, classSize, ranked, scoped }) {
+  const cls = row.grade ? (row.section ? `${row.grade} - ${row.section}` : row.grade) : "";
+  const parts = [];
+  if (row.rank.inClass !== null) parts.push(`${ordinal(row.rank.inClass)} of ${classSize} in class`);
+  if (!scoped && row.rank.overall !== null) parts.push(`${ordinal(row.rank.overall)} of ${ranked} in school`);
+  // "rank 2nd of 30 in class, 5th of 120 in school"
+  const rank = parts.length ? `rank ${parts.join(", ")}` : "not ranked yet (no test marks)";
+  const marks = row.marks.average !== null ? `${pct(row.marks.average)} (grade ${row.marks.grade}, ${row.marks.tests} test${row.marks.tests === 1 ? "" : "s"})` : "no tests yet";
+  const counted = row.attendance.present + row.attendance.late + row.attendance.absent;
+  const att = row.attendance.rate !== null ? `${pct(row.attendance.rate)} (${row.attendance.present + row.attendance.late} of ${counted} days)` : "not recorded";
+  const notes = [];
+  if (row.marks.best) notes.push(`Best: ${row.marks.best.name} at ${pct(row.marks.best.percent)}.`);
+  if (row.change !== null && row.change >= 3) notes.push(`Up ${Math.round(row.change)} points since the last period. Well done!`);
+  if (row.change !== null && row.change <= -5) notes.push(`Down ${Math.round(-row.change)} points since the last period.`);
+
+  const medal = row.rank.inClass === 1 ? "🥇 " : row.rank.inClass === 2 ? "🥈 " : row.rank.inClass === 3 ? "🥉 " : "";
+  const lines = [
+    greeting(guardianName),
+    "",
+    `🏆 Performance report of *${row.fullName}*${cls ? ` (Class ${cls})` : ""}`,
+    `_${period}_`,
+    "",
+    `${medal}*Rank:* ${parts.length ? parts.join(" · ") : "Not ranked yet (no test marks)"}`,
+    `📝 *Average marks:* ${marks}`,
+    `📅 *Attendance:* ${att}`,
+  ];
+  if (notes.length) lines.push("", ...notes);
+  lines.push("", "Regards,", school);
+
+  return {
+    text: lines.join("\n"),
+    params: [guardianName || "Parent", row.fullName, cls ? `Class ${cls}` : "-", period, rank, marks, att, notes.join(" ") || "Keep it up!", school],
   };
 }

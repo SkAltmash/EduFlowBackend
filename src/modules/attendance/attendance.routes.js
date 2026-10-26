@@ -24,16 +24,15 @@ router.param("studentId", (req, res, next, value) => {
   next();
 });
 
-// Every member can view; owners, admins and teachers can mark (date rules live in the service)
+// The class list is open to every member (accountants pick classes when assigning fees,
+// and get it without attendance numbers). Everything else is for teaching staff only.
 router.get("/classes", validateQuery(classesQuery), controller.classes);
-router.get("/register", validateQuery(registerQuery), controller.register);
-router.put(
-  "/register",
-  authorize(ROLES.OWNER, ROLES.ADMIN, ROLES.TEACHER),
-  validateBody(saveRegisterSchema),
-  controller.saveRegister
-);
-router.get("/report", validateQuery(reportQuery), controller.report);
-router.get("/students/:studentId", validateQuery(studentHistoryQuery), controller.studentHistory);
+
+const teachingStaff = authorize(ROLES.OWNER, ROLES.ADMIN, ROLES.TEACHER);
+router.get("/register", teachingStaff, validateQuery(registerQuery), controller.register);
+// Date rules (teachers: last 7 days) live in the service
+router.put("/register", teachingStaff, validateBody(saveRegisterSchema), controller.saveRegister);
+router.get("/report", teachingStaff, validateQuery(reportQuery), controller.report);
+router.get("/students/:studentId", teachingStaff, validateQuery(studentHistoryQuery), controller.studentHistory);
 
 export default router;

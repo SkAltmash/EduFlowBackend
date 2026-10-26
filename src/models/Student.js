@@ -14,7 +14,7 @@ const studentSchema = new mongoose.Schema(
     lastName: { type: String, trim: true, maxlength: 100, default: "" },
     gender: { type: String, enum: GENDERS },
     dateOfBirth: { type: Date },
-    // Free text until the Classes module exists, e.g. "10" or "Grade 5"
+    // The class's name from Settings → Classes (a free-text value only if the school has no class list yet)
     grade: { type: String, trim: true, maxlength: 50, default: "" },
     section: { type: String, trim: true, maxlength: 20, default: "" },
     rollNo: { type: String, trim: true, maxlength: 20, default: "" },
@@ -27,6 +27,18 @@ const studentSchema = new mongoose.Schema(
     admissionDate: { type: Date },
     status: { type: String, enum: STUDENT_STATUSES, default: "active" },
     notes: { type: String, trim: true, maxlength: 2000 },
+    // One entry per finished academic year, written by year-end promotion
+    classHistory: [
+      {
+        _id: false,
+        year: String,
+        grade: String,
+        section: String,
+        rollNo: String,
+        outcome: { type: String, enum: ["promoted", "retained", "graduated", "left"] },
+        promotionId: { type: mongoose.Schema.Types.ObjectId, ref: "Promotion" },
+      },
+    ],
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   },

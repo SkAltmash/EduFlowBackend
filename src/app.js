@@ -12,6 +12,10 @@ import attendanceRouter from "./modules/attendance/attendance.routes.js";
 import feesRouter from "./modules/fees/fees.routes.js";
 import whatsappRouter from "./modules/whatsapp/whatsapp.routes.js";
 import examsRouter from "./modules/exams/exams.routes.js";
+import dashboardRouter from "./modules/dashboard/dashboard.routes.js";
+import schoolRouter from "./modules/school/school.routes.js";
+import academicsRouter from "./modules/academics/academics.routes.js";
+import performanceRouter from "./modules/performance/performance.routes.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 
 const app = express();
@@ -62,6 +66,10 @@ app.use("/api/attendance", attendanceRouter);
 app.use("/api/fees", feesRouter);
 app.use("/api/whatsapp", whatsappRouter);
 app.use("/api/exams", examsRouter);
+app.use("/api/dashboard", dashboardRouter);
+app.use("/api/school", schoolRouter);
+app.use("/api/academics", academicsRouter);
+app.use("/api/performance", performanceRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

@@ -26,6 +26,7 @@ const ROLES_BY_TYPE = {
   attendance_summary: [ROLES.OWNER, ROLES.ADMIN, ROLES.TEACHER],
   exam_result: [ROLES.OWNER, ROLES.ADMIN, ROLES.TEACHER],
   progress_report: [ROLES.OWNER, ROLES.ADMIN, ROLES.TEACHER],
+  performance_report: [ROLES.OWNER, ROLES.ADMIN, ROLES.TEACHER],
 };
 function canSendType(req, res, next) {
   if (!ROLES_BY_TYPE[req.body.type]?.includes(req.user.role)) throw AppError.forbidden();

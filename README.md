@@ -39,6 +39,10 @@ src/
 │   ├── fees/      fee plans, dues, payments, receipts
 │   ├── whatsapp/  messages to parents (click-to-send + Cloud API)
 │   ├── exams/     tests, marks, grading, report cards
+│   ├── dashboard/ home-screen summary (one call)
+│   ├── school/    school profile and team (staff accounts and roles)
+│   ├── academics/ class list (sections, subjects), academic years, year-end promotion
+│   ├── performance/ leaderboards from test marks and attendance
 │   └── tenant/    example protected routes
 ├── utils/         jwt, password, cookies, crypto, AppError
 ├── app.js
@@ -222,7 +226,8 @@ approved leave is not counted.
 | GET | `/api/attendance/students/:studentId` | `?from=&to=` | one student's marks and totals; max 92 days |
 
 Who can mark: owners and admins (any past day), teachers (today and the last 7
-days). Accountants can only view. Future dates are refused with
+days). Accountants get `403` on everything except `GET /classes`, which they
+receive without attendance numbers (to pick a class when assigning fees). Future dates are refused with
 `403 ATTENDANCE_LOCKED`; a student who isn't in the class gives
 `400 STUDENT_NOT_IN_CLASS`.
 
@@ -338,6 +343,86 @@ standard competition ranking (1, 2, 2, 4) over completed results.
 WhatsApp message types `exam_result` (`{ examId, studentId }`) and
 `progress_report` (`{ studentId, month }`) send a test result or the monthly
 progress report to the guardian, in both click-to-send and automatic mode.
+
+## Dashboard ([src/modules/dashboard](src/modules/dashboard))
+
+| Method | Path | Query | Notes |
+| --- | --- | --- | --- |
+| GET | `/api/dashboard` | `?date=YYYY-MM-DD` (the browser's today) | every member |
+
+One response for the home screen: `students` (active, total, new this month),
+`attendance` (today's counts and rate, classes marked, absent students, a 14-day
+trend), `tests` (5 most recent with how many students are marked) and `fees`
+(collected today and this month, outstanding, overdue, recent receipts).
+Sections a role can't see are `null`: teachers get no `fees`, accountants no `attendance` or `tests`.
+Numbers come from the same code as the attendance overview and the fees summary.
+
+## School profile & team ([src/modules/school](src/modules/school))
+
+| Method | Path | Body | Notes |
+| --- | --- | --- | --- |
+| GET | `/api/school` | | every member: name + profile (phone, email, address, board, `academicYearStart`, `receiptNote`) |
+| PATCH | `/api/school` | any of `name`, `type`, `board`, `phone`, `email`, `website`, `address`, `city`, `state`, `pincode`, `academicYearStart`, `receiptNote` | owner/admin; `name` renames the tenant |
+| GET | `/api/school/members` | | owner/admin |
+| POST | `/api/school/members` | `{ email, role, name?, password? }` | an existing account (same email) just gets access; otherwise `name` + `password` create one (`400 NEW_ACCOUNT_DETAILS_REQUIRED` if missing) |
+| PATCH | `/api/school/members/:userId` | `{ role }` | ends that person's sessions for this school |
+| DELETE | `/api/school/members/:userId` | | removes access only; the account and its records stay |
+
+Owners manage every role; admins manage teachers and accountants only (`403 ROLE_NOT_ALLOWED`).
+Nobody can change or remove themselves (`CANNOT_CHANGE_SELF`), and the last owner can't be
+demoted or removed (`LAST_OWNER`). Team changes are written to the audit log.
+
+Own account (any signed-in member): `PATCH /api/auth/me` `{ name }`, and
+`POST /api/auth/change-password` `{ currentPassword, newPassword }`, which signs out every
+other session and keeps the current one (rate limited like login).
+
+## Classes, years & promotion ([src/modules/academics](src/modules/academics))
+
+Every member can read; owners and admins change. Records keep storing the class **name**
+(`grade`) and `section` as text, so history stays readable; the class list makes those
+names consistent:
+
+- With a class list, students (create, edit, import) and tests must use a listed class and
+  section. Input is matched loosely: "Class 5", "V", "5th", "Std 5" all mean class **5**, and
+  "a" means section **A**. With no list yet, any text is accepted as before.
+- Renaming a class renames it on students, attendance, tests, dues and fee plans.
+
+| Method | Path | Body | Notes |
+| --- | --- | --- | --- |
+| GET | `/api/academics/classes` | | classes in order with student counts, plus `unknown` (names on students not in the list, with a `suggestion`), `strays` (unlisted sections) and `unassigned` |
+| POST | `/api/academics/classes` | `{ name, sections?, subjects?: [{ name, maxMarks? }] }` | `409 CLASS_EXISTS` for another spelling of an existing class |
+| POST | `/api/academics/classes/bulk` | `{ names: [], sections? }` | templates such as Nursery to 10; skips existing |
+| POST | `/api/academics/classes/setup-from-students` | | builds the list from students, folding spellings together and renaming them everywhere |
+| POST | `/api/academics/classes/merge` | `{ from: { grade, section? }, to: { classId, section? } }` | moves every record of a class (or one section) into a listed class |
+| PUT | `/api/academics/classes/order` | `{ ids: [...] }` | every class once, lowest first |
+| PATCH / DELETE | `/api/academics/classes/:classId` | | removing a section or class that has active students → `409` |
+| GET / POST | `/api/academics/years` | `{ name, startDate, endDate }` | the first GET creates the current year from the profile's start month |
+| PATCH / DELETE | `/api/academics/years/:yearId` | any field, or `{ isCurrent: true }` | |
+| GET | `/api/academics/promotions/preview` | | classes with their active students and the suggested next class (the last one graduates) |
+| POST | `/api/academics/promotions` | `{ toYear: { name, startDate, endDate }, moves: [{ classId, target: classId\|"graduate"\|"stay" }], exceptions?: [{ studentId, action: "retain"\|"leave"\|"graduate" }], clearRollNumbers? }` | one transaction; each student gets a `classHistory` entry; `toYear` becomes current |
+| GET | `/api/academics/promotions` | | latest 20, with `canUndo` on the most recent |
+| POST | `/api/academics/promotions/:promotionId/undo` | | restores students not edited since (others are counted as `skipped`) and makes the old year current |
+
+Promotion keeps a student's section letter when the next class has it, uses the only section
+when there is one, and otherwise leaves it empty (reported as `noSection`).
+
+## Performance ([src/modules/performance](src/modules/performance))
+
+| Method | Path | Query | Notes |
+| --- | --- | --- | --- |
+| GET | `/api/performance` | `?from=&to=&grade=&section=` (max 400 days) | owners, admins, teachers |
+
+Computed fresh on every call (the page refreshes it every minute). Per active student:
+average test percentage (each test counts equally, same results as the Tests module),
+attendance rate (leave not counted against), and an overall `score` = 70% marks + 30%
+attendance. Students without test marks in the period have no overall score, so attendance
+alone can't outrank students who sat tests; they still rank on attendance. Each student gets
+`rank.overall / marks / attendance / inClass` (1, 1, 3 ranking) and `change` against the
+previous period of the same length. `classes` has class averages and toppers.
+
+Parents can get each child's result on WhatsApp with the `performance_report` message type
+(refs `{ studentId, from, to, grade?, section? }`; owner/admin/teacher): class rank, school
+rank (when not filtered to a class), average marks, attendance and a note (best test, change).
 
 ## Super admin (platform administration)
 

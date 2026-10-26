@@ -13,6 +13,7 @@ import AppError from "../../utils/AppError.js";
 import { canEncrypt, decrypt, encrypt } from "../../utils/crypto.js";
 import * as messages from "./whatsapp.messages.js";
 import * as exams from "../exams/exams.service.js";
+import * as performance from "../performance/performance.service.js";
 
 const oid = (id) => new mongoose.Types.ObjectId(String(id));
 const fullName = (s) => [s.firstName, s.lastName].filter(Boolean).join(" ");
@@ -160,6 +161,7 @@ export async function testSend(tenantId, { to }) {
  *   attendance_summary { studentId, month }
  *   exam_result        { examId, studentId }
  *   progress_report    { studentId, month }
+ *   performance_report { studentId, from, to, grade?, section? }
  * Returns one entry per ref: { refKey, studentId, studentName, guardianName, to, text, params, skip? }.
  */
 async function buildRecipients(tenantId, type, refs, { countryCode, today = utcToday() }) {
@@ -317,6 +319,34 @@ async function buildRecipients(tenantId, type, refs, { countryCode, today = utcT
         const anyTest = report?.tests.some((t) => t.result.status !== "pending");
         if (!report || (!anyTest && report.attendance.days === 0)) return { skip: "Nothing to report this month" };
         return messages.progressReport({ school, guardianName: base.guardianName, report });
+      })
+    );
+  }
+
+  if (type === "performance_report") {
+    // One leaderboard per period/class scope; ranks need everyone in it
+    const boards = new Map();
+    const scopeKey = (r) => `${r.from}|${r.to}|${r.grade ?? ""}|${r.section ?? ""}`;
+    for (const ref of refs) {
+      if (!boards.has(scopeKey(ref))) boards.set(scopeKey(ref), await performance.leaderboard(tenantId, { from: ref.from, to: ref.to, grade: ref.grade, section: ref.section }));
+    }
+    const short = (d) => messages.formatDay(d).replace(/ \d{4}$/, "");
+    return refs.map((ref) =>
+      withStudent(ref, `perf:${ref.studentId}:${ref.from}:${ref.to}`, (s, base) => {
+        const board = boards.get(scopeKey(ref));
+        const row = board.students.find((r) => r.id === ref.studentId);
+        if (!row) return { skip: "Not in this leaderboard" };
+        if (row.marks.average === null && row.attendance.rate === null) return { skip: "No marks or attendance in this period" };
+        const classSize = board.students.filter((r) => r.grade === row.grade && r.section === row.section && r.rank.inClass !== null).length;
+        return messages.performanceReport({
+          school,
+          guardianName: base.guardianName,
+          row,
+          period: `${short(ref.from)} to ${messages.formatDay(ref.to)}`,
+          classSize,
+          ranked: board.summary.ranked,
+          scoped: Boolean(ref.grade),
+        });
       })
     );
   }

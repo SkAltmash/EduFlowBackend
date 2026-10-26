@@ -3,6 +3,7 @@ import Attendance, { ATTENDANCE_STATUSES } from "../../models/Attendance.js";
 import Student from "../../models/Student.js";
 import { ROLES } from "../../models/Membership.js";
 import AppError from "../../utils/AppError.js";
+import { loadClassList } from "../academics/class-names.js";
 
 // Natural ordering: "Grade 2" < "Grade 10", roll "9" < "10"
 const COLLATION = { locale: "en", numericOrdering: true };
@@ -35,7 +36,6 @@ function rate(counts) {
 
 /** Whether `role` may change marks for `date`, and why not. */
 export function editPermission(role, date) {
-  if (role === ROLES.ACCOUNTANT) return { canEdit: false, reason: "Accountants can view attendance but not mark it." };
   if (date > latestToday()) return { canEdit: false, reason: "Attendance can't be marked for a future date." };
   if (role === ROLES.TEACHER && date < addDays(latestToday(), -(TEACHER_EDIT_WINDOW_DAYS + 1))) {
     return {
@@ -70,9 +70,10 @@ function sortByRoll(rows) {
  * that day (e.g. moved class since), matching what the register shows.
  */
 export async function listClasses(tenantId, { date }) {
-  const [students, records] = await Promise.all([
+  const [students, records, classList] = await Promise.all([
     Student.find({ tenantId, status: "active" }, { grade: 1, section: 1 }).lean(),
     Attendance.find({ tenantId, date }, { studentId: 1, grade: 1, section: 1, status: 1 }).lean(),
+    loadClassList(tenantId),
   ]);
 
   const classes = new Map();
@@ -98,7 +99,8 @@ export async function listClasses(tenantId, { date }) {
     date,
     classes: [...classes.values()]
       .map(({ ids, ...c }) => ({ ...c, students: ids.size, rate: rate(c.counts) }))
-      .sort((a, b) => naturalCompare(a.grade, b.grade) || naturalCompare(a.section, b.section)),
+      // School order: Nursery, LKG, 1, 2 …
+      .sort((a, b) => classList.compareGrades(a.grade, b.grade) || naturalCompare(a.section, b.section)),
     // Active students without a class can't appear in any register
     unassigned,
   };

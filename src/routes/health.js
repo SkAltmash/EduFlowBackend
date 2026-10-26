@@ -9,6 +9,9 @@ router.get("/", (req, res) => {
     status: "ok",
     uptime: process.uptime(),
     db: dbConnected ? "connected" : "disconnected",
+    // The caller's IP as the server sees it (what rate limiting uses). Should match your
+    // own public IP; if it shows a proxy's IP instead, adjust TRUST_PROXY.
+    yourIp: req.ip,
   });
 });
 

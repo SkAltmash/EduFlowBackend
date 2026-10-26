@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import cookieParser from "cookie-parser";
-import env from "./config/env.js";
+import env, { normalizeOrigin } from "./config/env.js";
 import healthRouter from "./routes/health.js";
 import authRouter from "./modules/auth/auth.routes.js";
 import tenantRouter from "./modules/tenant/tenant.routes.js";
@@ -16,6 +16,14 @@ import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 
 const app = express();
 
+// Log each blocked origin once, so a missing CORS_ORIGINS entry is easy to spot in the server logs
+const warnedOrigins = new Set();
+function warnBlockedOrigin(origin) {
+  if (warnedOrigins.has(origin) || warnedOrigins.size > 100) return;
+  warnedOrigins.add(origin);
+  console.warn(`CORS: blocked requests from ${origin}. Add it to CORS_ORIGINS to allow it. Allowed now: ${env.corsOrigins.join(", ") || "(none)"}`);
+}
+
 app.set("trust proxy", env.TRUST_PROXY);
 app.disable("x-powered-by");
 
@@ -24,7 +32,8 @@ app.use(
   cors({
     origin(origin, callback) {
       // Allow non-browser clients (curl, server-to-server) which send no Origin
-      if (!origin || env.corsOrigins.includes(origin)) return callback(null, true);
+      if (!origin || env.corsOrigins.includes(normalizeOrigin(origin))) return callback(null, true);
+      warnBlockedOrigin(origin);
       callback(null, false);
     },
     credentials: true, // needed for the refresh-token cookie

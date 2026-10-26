@@ -45,6 +45,11 @@ if (!parsed.success) {
 
 const env = parsed.data;
 
+/** "https://App.example.com/" -> "https://app.example.com" (the form browsers send). */
+export function normalizeOrigin(value) {
+  return String(value ?? "").trim().replace(/^["']|["']$/g, "").trim().replace(/\/+$/, "").toLowerCase();
+}
+
 if (env.JWT_ACCESS_SECRET === env.JWT_REFRESH_SECRET) {
   console.error("JWT_ACCESS_SECRET and JWT_REFRESH_SECRET must be different");
   process.exit(1);
@@ -53,6 +58,8 @@ if (env.JWT_ACCESS_SECRET === env.JWT_REFRESH_SECRET) {
 export default {
   ...env,
   isProduction: env.NODE_ENV === "production",
-  corsOrigins: env.CORS_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean),
+  // Forgiving about how origins are typed in a dashboard: quotes, spaces,
+  // a trailing slash or capitals would otherwise silently never match
+  corsOrigins: env.CORS_ORIGINS.split(",").map(normalizeOrigin).filter(Boolean),
   adminIpAllowlist: env.ADMIN_IP_ALLOWLIST.split(",").map((ip) => ip.trim()).filter(Boolean),
 };

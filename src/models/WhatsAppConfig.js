@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-export const MESSAGE_TYPES = Object.freeze(["fee_receipt", "fee_reminder", "absence", "attendance_summary"]);
+export const MESSAGE_TYPES = Object.freeze(["fee_receipt", "fee_reminder", "absence", "attendance_summary", "exam_result", "progress_report"]);
 
 // One per school. "link" mode opens WhatsApp with the message ready (no setup);
 // "api" mode sends automatically through the school's WhatsApp Business number.
@@ -27,6 +27,8 @@ const whatsAppConfigSchema = new mongoose.Schema(
       fee_reminder: { type: templateSchema, default: () => ({}) },
       absence: { type: templateSchema, default: () => ({}) },
       attendance_summary: { type: templateSchema, default: () => ({}) },
+      exam_result: { type: templateSchema, default: () => ({}) },
+      progress_report: { type: templateSchema, default: () => ({}) },
     },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   },

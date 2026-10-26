@@ -27,9 +27,9 @@ const installment = z.object({
 
 const planFields = {
   name: z.string().trim().min(2, "Plan name must be at least 2 characters").max(150),
-  academicYear: z.string().trim().max(20).default(""),
-  grade: z.string().trim().max(50).default(""),
-  description: z.string().trim().max(500).default(""),
+  academicYear: z.string().trim().max(20),
+  grade: z.string().trim().max(50),
+  description: z.string().trim().max(500),
   installments: z
     .array(installment)
     .min(1, "Add at least one installment")
@@ -37,7 +37,13 @@ const planFields = {
     .refine((list) => list.some((i) => i.items.some((it) => it.amount > 0)), "The plan has no amounts"),
 };
 
-export const createPlanSchema = z.object(planFields);
+// Defaults only when creating: on a partial update a default would overwrite saved values
+export const createPlanSchema = z.object({
+  ...planFields,
+  academicYear: planFields.academicYear.default(""),
+  grade: planFields.grade.default(""),
+  description: planFields.description.default(""),
+});
 
 export const updatePlanSchema = z
   .object({ ...planFields, archived: z.boolean() })

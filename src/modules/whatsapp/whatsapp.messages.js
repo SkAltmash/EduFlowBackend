@@ -15,6 +15,18 @@ export function formatMonth(month) {
 }
 
 export const TEMPLATES = {
+  exam_result: {
+    title: "Test result",
+    suggestedName: "test_result",
+    body: "Dear {{1}}, here are the results of {{2}} in {{3}} held on {{4}}: {{5}}. Total: {{6}}, grade {{7}}. {{8}} Regards, {{9}}.",
+    example: ["Mr. Sharma", "Aarav Sharma", "Unit Test 1", "12 Oct 2026", "Maths 45/50, Science 38/50", "83/100 (83%)", "A2", "Rank 3 of 30. Result: Pass.", "Sunrise Public School"],
+  },
+  progress_report: {
+    title: "Monthly progress report",
+    suggestedName: "progress_report",
+    body: "Dear {{1}}, progress report of {{2}} for {{3}}: tests {{4}}. Average {{5}}, grade {{6}}. Attendance {{7}}. Regards, {{8}}.",
+    example: ["Mr. Sharma", "Aarav Sharma", "October 2026", "Unit Test 1 83%, Maths Weekly 90%", "86.5%", "A2", "90.9% (20 of 22 days)", "Sunrise Public School"],
+  },
   fee_receipt: {
     title: "Fee receipt",
     suggestedName: "fee_receipt",
@@ -122,5 +134,92 @@ export function attendanceSummary({ school, guardianName, studentName, month, co
       school,
     ].join("\n"),
     params: [guardianName || "Parent", studentName, formatMonth(month), attended, days, rate, counts.absent, counts.late, school],
+  };
+}
+
+const pct = (p) => (p === null || p === undefined ? "-" : `${p % 1 === 0 ? p : p.toFixed(1)}%`);
+const mark = (m) => (m % 1 === 0 ? String(m) : String(Math.round(m * 100) / 100));
+
+/** exam: { name, date, subjects:[{id,name,maxMarks}], maxTotal }, result: computed result, rank of `ranked` students. */
+export function examResult({ school, guardianName, studentName, className, exam, result, ranked, remarks }) {
+  const subjectLines = exam.subjects.map((sub, i) => {
+    const r = result.subjects[i];
+    if (r.absent) return { text: `• ${sub.name}: Absent`, short: `${sub.name} AB` };
+    return { text: `• ${sub.name}: ${mark(r.marks)}/${sub.maxMarks} (${r.grade})`, short: `${sub.name} ${mark(r.marks)}/${sub.maxMarks}` };
+  });
+  const failed = exam.subjects.filter((_, i) => result.subjects[i].passed === false && !result.subjects[i].absent).map((s) => s.name);
+  const outcome =
+    result.status === "absent"
+      ? "Absent for this test."
+      : result.status === "pass"
+        ? "Result: Pass."
+        : `Needs improvement${failed.length ? ` in ${failed.join(", ")}` : ""}.`;
+  const rankText = result.rank ? `Rank ${result.rank} of ${ranked}. ` : "";
+
+  const lines = [
+    greeting(guardianName),
+    "",
+    `📝 *${exam.name}* results of *${studentName}*${className ? ` (Class ${className})` : ""}, ${formatDay(exam.date)}:`,
+    "",
+    ...subjectLines.map((l) => l.text),
+    "",
+  ];
+  if (result.status === "absent") lines.push("❗ Absent for this test.");
+  else {
+    lines.push(`Total: *${mark(result.total)}/${result.max}* · *${pct(result.percent)}* · Grade *${result.grade}*${result.rank ? ` · Rank ${result.rank} of ${ranked}` : ""}`);
+    lines.push(result.status === "pass" ? "Result: ✅ Pass" : `Result: ⚠️ ${outcome}`);
+  }
+  if (remarks) lines.push(`Remarks: ${remarks}`);
+  lines.push("", "Regards,", school);
+
+  return {
+    text: lines.join("\n"),
+    params: [
+      guardianName || "Parent",
+      studentName,
+      exam.name,
+      formatDay(exam.date),
+      subjectLines.map((l) => l.short).join(", "),
+      result.status === "absent" ? "Absent" : `${mark(result.total)}/${result.max} (${pct(result.percent)})`,
+      result.grade ?? "-",
+      `${rankText}${outcome}${remarks ? ` Remarks: ${remarks}.` : ""}`,
+      school,
+    ],
+  };
+}
+
+/** report: studentMonthlyReport() output */
+export function progressReport({ school, guardianName, report }) {
+  const { student, tests, summary, attendance, month } = report;
+  const done = tests.filter((t) => t.result.status !== "pending");
+  const testLines = done.map((t) =>
+    t.result.status === "absent"
+      ? { text: `• ${t.exam.name} (${formatDay(t.exam.date).replace(/ \d{4}$/, "")}): Absent`, short: `${t.exam.name} AB` }
+      : { text: `• ${t.exam.name} (${formatDay(t.exam.date).replace(/ \d{4}$/, "")}): ${pct(t.result.percent)} · ${t.result.grade}`, short: `${t.exam.name} ${pct(t.result.percent)}` }
+  );
+  const att = attendance.days
+    ? `${pct(attendance.rate)} (${attendance.present + attendance.late} of ${attendance.days} days)`
+    : "not recorded";
+
+  const lines = [greeting(guardianName), "", `📊 Progress report of *${student.fullName}* for *${formatMonth(month)}*`, ""];
+  if (testLines.length) {
+    lines.push("*Tests*", ...testLines.map((l) => l.text));
+    if (summary.average !== null) lines.push(`Average: *${pct(summary.average)}* · Grade *${summary.grade}*`);
+  } else lines.push("No tests this month.");
+  lines.push("", `*Attendance:* ${att}${attendance.absent ? ` · Absent ${attendance.absent}` : ""}${attendance.late ? ` · Late ${attendance.late}` : ""}`);
+  lines.push("", "Regards,", school);
+
+  return {
+    text: lines.join("\n"),
+    params: [
+      guardianName || "Parent",
+      student.fullName,
+      formatMonth(month),
+      testLines.length ? testLines.map((l) => l.short).join(", ") : "none this month",
+      pct(summary.average),
+      summary.grade ?? "-",
+      att,
+      school,
+    ],
   };
 }

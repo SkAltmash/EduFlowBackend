@@ -12,6 +12,7 @@ import Attendance from "../../models/Attendance.js";
 import AppError from "../../utils/AppError.js";
 import { canEncrypt, decrypt, encrypt } from "../../utils/crypto.js";
 import * as messages from "./whatsapp.messages.js";
+import * as exams from "../exams/exams.service.js";
 
 const oid = (id) => new mongoose.Types.ObjectId(String(id));
 const fullName = (s) => [s.firstName, s.lastName].filter(Boolean).join(" ");
@@ -157,6 +158,8 @@ export async function testSend(tenantId, { to }) {
  *   fee_reminder       { studentId }
  *   absence            { studentId, date }
  *   attendance_summary { studentId, month }
+ *   exam_result        { examId, studentId }
+ *   progress_report    { studentId, month }
  * Returns one entry per ref: { refKey, studentId, studentName, guardianName, to, text, params, skip? }.
  */
 async function buildRecipients(tenantId, type, refs, { countryCode, today = utcToday() }) {
@@ -264,6 +267,56 @@ async function buildRecipients(tenantId, type, refs, { countryCode, today = utcT
         const c = counts.get(`${ref.studentId}:${ref.month}`);
         if (!c) return { skip: "No attendance this month" };
         return messages.attendanceSummary({ school, guardianName: base.guardianName, studentName: base.studentName, month: ref.month, counts: c });
+      })
+    );
+  }
+
+  if (type === "exam_result") {
+    // One computed exam view per exam (ranks need the whole class)
+    const views = new Map();
+    for (const examId of [...new Set(refs.map((r) => r.examId))]) {
+      try {
+        views.set(examId, await exams.getExam(tenantId, examId));
+      } catch {
+        views.set(examId, null);
+      }
+    }
+    return refs.map((ref) =>
+      withStudent(ref, `${ref.examId}:${ref.studentId}`, (s, base) => {
+        const view = views.get(ref.examId);
+        if (!view) return { skip: "Test not found" };
+        const row = view.students.find((r) => r.student.id === ref.studentId);
+        if (!row) return { skip: "Not in this test's class" };
+        if (row.result.status === "pending") return { skip: "Marks not complete" };
+        const cls = row.student.grade ? (row.student.section ? `${row.student.grade} - ${row.student.section}` : row.student.grade) : "";
+        return messages.examResult({
+          school,
+          guardianName: base.guardianName,
+          studentName: base.studentName,
+          className: cls,
+          exam: view.exam,
+          result: row.result,
+          ranked: view.stats.completed,
+          remarks: row.remarks,
+        });
+      })
+    );
+  }
+
+  if (type === "progress_report") {
+    const reports = new Map();
+    for (const ref of refs) {
+      const key = `${ref.studentId}:${ref.month}`;
+      if (!reports.has(key) && studentById.has(ref.studentId)) {
+        reports.set(key, await exams.studentMonthlyReport(tenantId, ref.studentId, { month: ref.month }));
+      }
+    }
+    return refs.map((ref) =>
+      withStudent(ref, `progress:${ref.studentId}:${ref.month}`, (s, base) => {
+        const report = reports.get(`${ref.studentId}:${ref.month}`);
+        const anyTest = report?.tests.some((t) => t.result.status !== "pending");
+        if (!report || (!anyTest && report.attendance.days === 0)) return { skip: "Nothing to report this month" };
+        return messages.progressReport({ school, guardianName: base.guardianName, report });
       })
     );
   }

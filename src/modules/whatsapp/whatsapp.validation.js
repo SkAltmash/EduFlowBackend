@@ -11,6 +11,8 @@ const refSchemas = {
   fee_reminder: z.object({ studentId: objectId }),
   absence: z.object({ studentId: objectId, date: day }),
   attendance_summary: z.object({ studentId: objectId, month }),
+  exam_result: z.object({ examId: objectId, studentId: objectId }),
+  progress_report: z.object({ studentId: objectId, month }),
 };
 
 const batch = z

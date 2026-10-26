@@ -28,7 +28,8 @@ Packages: `express`, `cors`, `helmet`, `cookie-parser`, `express-rate-limit`,
 src/
 ├── config/        env.js (validated env vars), database.js
 ├── models/        User, Tenant, Membership, Session, AuditLog, Student, Attendance,
-│                  FeePlan, Invoice, Payment, Counter, WhatsAppConfig, WhatsAppMessage
+│                  FeePlan, Invoice, Payment, Counter, WhatsAppConfig, WhatsAppMessage,
+│                  Exam, ExamResult, SchoolSettings
 ├── middleware/    authenticate, authorize, requireSuperAdmin, ipAllowlist, validate, rateLimit, errorHandler
 ├── modules/
 │   ├── auth/      routes, controller, service, validation
@@ -37,6 +38,7 @@ src/
 │   ├── attendance/ daily registers and reports
 │   ├── fees/      fee plans, dues, payments, receipts
 │   ├── whatsapp/  messages to parents (click-to-send + Cloud API)
+│   ├── exams/     tests, marks, grading, report cards
 │   └── tenant/    example protected routes
 ├── utils/         jwt, password, cookies, crypto, AppError
 ├── app.js
@@ -288,7 +290,7 @@ attendance messages: owner/admin/teacher; settings and history: owner/admin.
 | GET | `/api/whatsapp/messages` | `?type=&page=&limit=` | message history |
 | GET / POST | `/api/whatsapp/webhook` | Meta verification / status callbacks | public; POST requires a valid `X-Hub-Signature-256` |
 
-`type` is `fee_receipt`, `fee_reminder`, `absence` or `attendance_summary`.
+`type` is `fee_receipt`, `fee_reminder`, `absence`, `attendance_summary`, `exam_result` or `progress_report`.
 Phone numbers are normalised to digits with the school's country code (default
 `91`) added to 10-digit numbers.
 
@@ -304,6 +306,38 @@ Phone numbers are normalised to digits with the school's country code (default
 
 Each school then enters its Phone number ID, a permanent System User token and
 the four template names; Settings shows the exact template text to submit.
+
+## Tests & report cards ([src/modules/exams](src/modules/exams))
+
+Owners, admins and teachers (accountants get `403`). A test belongs to a class:
+`grade` plus an optional `section`; **no section = the whole class, every
+section**. A test has 1–20 subjects, each with `maxMarks` and optional
+`passMarks`. Marks may use up to 2 decimals (e.g. 42.5); a subject can be
+marked absent.
+
+Totals, percentages, letter grades, pass/fail and ranks are **computed when
+read**, never stored, so changing the grading scale or a subject's maximum is
+always reflected. Grading is per school: CBSE 8-point (A1 ≥91 … D ≥33, E) by
+default, or simple (A+ ≥90 … F). Pass mark is 33% unless the subject sets its
+own. A result is `pending` until every subject has marks (or AB), `absent` if
+absent in every subject, `fail` if below the pass mark in any subject. Ranks use
+standard competition ranking (1, 2, 2, 4) over completed results.
+
+| Method | Route | Body / query | Notes |
+|---|---|---|---|
+| GET / PUT | `/api/exams/settings` | `{ scale: "cbse"\|"simple", passPercent }` | PUT: owner/admin |
+| GET | `/api/exams` | `?grade=&section=&month=YYYY-MM&search=&page=&limit=` | with `stats` (completed, average, passed) |
+| POST | `/api/exams` | `{ name, grade, section?, date, subjects: [{ name, maxMarks, passMarks? }], description? }` | `201` with the full view |
+| GET | `/api/exams/:examId` | | roster with each student's computed `result`, plus class `stats` |
+| PATCH | `/api/exams/:examId` | any field; keep `_id` on subjects you edit | removing a subject with marks → `409 SUBJECT_HAS_MARKS`; lowering a max below entered marks → `409 MARKS_ABOVE_MAX` |
+| DELETE | `/api/exams/:examId` | | owner/admin; deletes its marks too |
+| PUT | `/api/exams/:examId/marks` | `{ entries: [{ studentId, marks: [{ subjectId, marks\|null, absent }], remarks? }] }` | upserts; only students of the class |
+| GET | `/api/exams/reports/students/:studentId` | `?month=YYYY-MM` | the month's tests with results, average, grade, attendance |
+| GET | `/api/exams/reports/class` | `?grade=&section=&month=` | every student's average, grade and attendance for the month |
+
+WhatsApp message types `exam_result` (`{ examId, studentId }`) and
+`progress_report` (`{ studentId, month }`) send a test result or the monthly
+progress report to the guardian, in both click-to-send and automatic mode.
 
 ## Super admin (platform administration)
 
@@ -365,6 +399,9 @@ All routes below need `Authorization: Bearer <platform token>`.
 | counters | `{ tenantId, key }` unique | per-school receipt numbers |
 | whatsappconfigs | `{ tenantId }` unique | one settings document per school |
 | whatsappmessages | `{ tenantId, type, refKey, createdAt }`, `{ tenantId, createdAt }`, `{ waMessageId }` sparse | "already messaged" checks; history; webhook status updates |
+| exams | `{ tenantId, grade, section, date }`, `{ tenantId, date }` | a class's tests; tests in a month |
+| examresults | `{ tenantId, examId, studentId }` unique, `{ tenantId, studentId }` | one marks record per student per test; a student's monthly report |
+| schoolsettings | `{ tenantId }` unique | grading scale per school |
 | auditlogs | `{ createdAt: -1 }`, `{ actorId, createdAt }`, `{ targetId, createdAt }`, `{ action, createdAt }` | browse and filter the audit trail |
 
 In development Mongoose builds these automatically. In production `autoIndex`

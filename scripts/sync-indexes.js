@@ -15,6 +15,9 @@ import "../src/models/Payment.js";
 import "../src/models/Counter.js";
 import "../src/models/WhatsAppConfig.js";
 import "../src/models/WhatsAppMessage.js";
+import "../src/models/Exam.js";
+import "../src/models/ExamResult.js";
+import "../src/models/SchoolSettings.js";
 
 await connectDB();
 for (const model of Object.values(mongoose.models)) {

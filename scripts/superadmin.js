@@ -1,4 +1,5 @@
-// Manage super admin accounts. This is the ONLY way to create one.
+// Manage super admin accounts from the server. Use it for the first super admin; after that,
+// super admins can also add and remove others in the console (Admins).
 //
 //   npm run superadmin -- create  --email admin@eduflow.com --name "Platform Admin"
 //   npm run superadmin -- promote --email someone@example.com

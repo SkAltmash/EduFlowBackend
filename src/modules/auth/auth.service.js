@@ -419,7 +419,7 @@ export async function getCurrentUser({ id, tenantId, isImpersonating }) {
 
 function assertOwnAccount({ isImpersonating }) {
   // A super admin inside a school is using someone else's workspace, not their own account
-  if (isImpersonating) throw AppError.forbidden("Super admin accounts are managed with `npm run superadmin`", "SUPER_ADMIN_PROTECTED");
+  if (isImpersonating) throw AppError.forbidden("Change your super admin account in the console (Admins)", "SUPER_ADMIN_PROTECTED");
 }
 
 export async function updateMe(actor, { name }) {

@@ -5,10 +5,11 @@ import { z } from "zod";
 import * as platform from "./platform.service.js";
 import { getAccess } from "./subscription.js";
 import { PLAN_FEATURES } from "../../models/PlatformPlan.js";
-import { objectId } from "../auth/auth.validation.js";
+import { email, objectId, strongPassword } from "../auth/auth.validation.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { validateBody, validateQuery } from "../../middleware/validate.js";
 import AppError from "../../utils/AppError.js";
+import { REFRESH_COOKIE_NAME } from "../../utils/cookies.js";
 
 const ctx = (req) => ({ adminId: req.admin.id, ip: req.ip, userAgent: req.get("user-agent") });
 const money = z.number().int().min(0).max(1_000_000_000);
@@ -59,12 +60,17 @@ const listQuery = z.object({
   status: z.enum(["all", "none", "trial", "active", "paying", "overdue", "expired", "suspended"]).default("all"),
   health: z.enum(["all", "active", "quiet", "never", "new"]).default("all"),
 });
+const settingsSchema = z.object({
+  supportWhatsapp: z.string().trim().transform((v) => v.replace(/\D/g, "")).pipe(z.union([z.literal(""), z.string().min(10, "Enter the number with country code, e.g. 919876543210").max(15)])),
+  supportEmail: z.union([z.literal(""), email]),
+});
+const superAdminSchema = z.object({ email, name: z.string().trim().min(2).max(100).optional(), password: strongPassword.optional() });
 const codeSchema = z.object({ code: z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code") });
 
 // Mounted inside the admin router, which already applies the IP allowlist, rate limit and super admin check
 export const adminPlatformRouter = Router();
 const r = adminPlatformRouter;
-for (const name of ["schoolId", "planId", "announcementId", "noteId", "paymentId"]) {
+for (const name of ["schoolId", "planId", "announcementId", "noteId", "paymentId", "userId"]) {
   r.param(name, (req, res, next, value) => {
     if (!objectId.safeParse(value).success) throw AppError.badRequest(`Invalid ${name}`, "INVALID_ID");
     next();
@@ -101,6 +107,25 @@ r.post("/announcements", validateBody(announcementSchema), async (req, res) => r
 r.patch("/announcements/:announcementId", validateBody(announcementSchema.partial()), async (req, res) => res.json(await platform.saveAnnouncement(ctx(req), req.params.announcementId, req.body)));
 r.delete("/announcements/:announcementId", async (req, res) => res.json(await platform.deleteAnnouncement(ctx(req), req.params.announcementId)));
 
+r.get("/settings", async (req, res) => res.json(await platform.getSettings()));
+r.put("/settings", validateBody(settingsSchema), async (req, res) => res.json(await platform.saveSettings(ctx(req), req.body)));
+
+r.get("/super-admins", async (req, res) => res.json(await platform.listSuperAdmins(ctx(req))));
+r.post("/super-admins", validateBody(superAdminSchema), async (req, res) => res.status(201).json(await platform.addSuperAdmin(ctx(req), req.body)));
+r.patch(
+  "/super-admins/:userId",
+  validateBody(z.object({ name: z.string().trim().min(2).max(100).optional(), email: email.optional() }).refine((v) => v.name || v.email, "Nothing to change")),
+  async (req, res) => res.json(await platform.updateSuperAdmin(ctx(req), req.params.userId, req.body))
+);
+r.post("/super-admins/:userId/password", validateBody(z.object({ password: strongPassword })), async (req, res) => {
+  await platform.resetSuperAdminPassword(ctx(req), req.params.userId, req.body);
+  res.status(204).end();
+});
+r.post("/account/password", validateBody(z.object({ currentPassword: z.string().min(1).max(200), newPassword: strongPassword })), async (req, res) =>
+  res.json(await platform.changeOwnPassword(ctx(req), req.body, req.cookies?.[REFRESH_COOKIE_NAME]))
+);
+r.delete("/super-admins/:userId", async (req, res) => res.json(await platform.removeSuperAdmin(ctx(req), req.params.userId)));
+
 r.get("/2fa", async (req, res) => res.json(await platform.twoFactorStatus(ctx(req))));
 r.post("/2fa/setup", async (req, res) => res.json(await platform.twoFactorSetup(ctx(req))));
 r.post("/2fa/enable", validateBody(codeSchema), async (req, res) => res.json(await platform.twoFactorEnable(ctx(req), req.body)));
@@ -109,8 +134,8 @@ r.post("/2fa/disable", validateBody(codeSchema), async (req, res) => res.json(aw
 /** For every member of a school: its plan status, limits, features and announcements. */
 export const tenantStatusRouter = Router();
 tenantStatusRouter.get("/status", authenticate, async (req, res) => {
-  const [subscription, announcements, { plans }] = await Promise.all([getAccess(req.user.tenantId), platform.activeAnnouncements(), platform.listPlans()]);
+  const [subscription, announcements, { plans }, settings] = await Promise.all([getAccess(req.user.tenantId), platform.activeAnnouncements(), platform.listPlans(), platform.getSettings()]);
   // Schools see the plans on offer, without the per-plan school counts
   const offered = plans.filter((p) => !p.archived).map(({ schools: _schools, ...p }) => p);
-  res.json({ subscription, announcements, plans: offered, support: { whatsapp: process.env.SUPPORT_WHATSAPP ?? "", email: process.env.SUPPORT_EMAIL ?? "" } });
+  res.json({ subscription, announcements, plans: offered, support: { whatsapp: settings.supportWhatsapp, email: settings.supportEmail } });
 });

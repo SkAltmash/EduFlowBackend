@@ -8,6 +8,7 @@ import Exam from "../../models/Exam.js";
 import Membership from "../../models/Membership.js";
 import Payment from "../../models/Payment.js";
 import PlatformPlan, { PLAN_FEATURES } from "../../models/PlatformPlan.js";
+import PlatformSettings from "../../models/PlatformSettings.js";
 import SchoolSettings from "../../models/SchoolSettings.js";
 import Session from "../../models/Session.js";
 import Student from "../../models/Student.js";
@@ -21,6 +22,8 @@ import { canEncrypt, decrypt, encrypt } from "../../utils/crypto.js";
 import { errorStats } from "../../middleware/errorHandler.js";
 import { TRIAL_DAYS, computeAccess, ensureDefaultPlans, invalidateAccess } from "./subscription.js";
 import { newSecret, otpauthUrl, verifyCode } from "./totp.js";
+import { hashPassword, verifyPassword } from "../../utils/password.js";
+import { verifyRefreshToken } from "../../utils/jwt.js";
 
 const DAY_MS = 86_400_000;
 const oid = (id) => new mongoose.Types.ObjectId(String(id));
@@ -525,4 +528,120 @@ export async function twoFactorDisable(ctx, { code }) {
   await u.save();
   await audit(ctx, { action: "admin.2fa_disable", targetType: "user", targetId: u._id });
   return { enabled: false };
+}
+
+// ---------------------------------------------------------------------------
+// Platform settings (support contact shown to schools)
+// ---------------------------------------------------------------------------
+
+let settingsCache = null;
+let settingsAt = 0;
+
+const serializeSettings = (s) => ({ supportWhatsapp: s?.supportWhatsapp ?? "", supportEmail: s?.supportEmail ?? "", updatedAt: s?.updatedAt ?? null });
+
+export async function getSettings() {
+  if (settingsCache && Date.now() - settingsAt < 60_000) return settingsCache;
+  settingsCache = serializeSettings(await PlatformSettings.findOne({ key: "platform" }).lean());
+  settingsAt = Date.now();
+  return settingsCache;
+}
+
+export async function saveSettings(ctx, data) {
+  const s = await PlatformSettings.findOneAndUpdate({ key: "platform" }, { $set: { ...data, updatedBy: ctx.adminId } }, { upsert: true, returnDocument: "after" }).lean();
+  settingsCache = serializeSettings(s);
+  settingsAt = Date.now();
+  await audit(ctx, { action: "platform.settings_update", targetType: "platform", metadata: data });
+  return settingsCache;
+}
+
+// ---------------------------------------------------------------------------
+// Super admins
+// ---------------------------------------------------------------------------
+
+export async function listSuperAdmins(ctx) {
+  const admins = await User.find({ isSuperAdmin: true }).select("+isSuperAdmin").sort({ createdAt: 1 }).lean();
+  return {
+    admins: admins.map((u) => ({ id: String(u._id), name: u.name, email: u.email, isActive: u.isActive, twoFactor: Boolean(u.twoFactor?.enabled), createdAt: u.createdAt, isYou: String(u._id) === String(ctx.adminId) })),
+  };
+}
+
+/** Makes someone a super admin: promotes an existing account, or creates one with the given password. */
+export async function addSuperAdmin(ctx, { email, name, password }) {
+  let user = await User.findOne({ email }).select("+isSuperAdmin");
+  const created = !user;
+  if (user?.isSuperAdmin) throw AppError.conflict(`${email} is already a super admin`, "ALREADY_SUPER_ADMIN");
+  if (user) {
+    user.isSuperAdmin = true;
+    if (!user.isActive) user.isActive = true;
+    await user.save();
+    // Their next sign-in gives a console session instead of a school one
+    await Session.updateMany({ userId: user._id, revokedAt: null }, { $set: { revokedAt: new Date() } });
+  } else {
+    if (!name || !password) throw AppError.badRequest("No account with that email. Enter a name and password to create one.", "NAME_PASSWORD_REQUIRED");
+    user = await User.create({ name, email, passwordHash: await hashPassword(password), isSuperAdmin: true });
+  }
+  await audit(ctx, { action: "superadmin.add", targetType: "user", targetId: user._id, metadata: { email, created } });
+  return listSuperAdmins(ctx);
+}
+
+export async function removeSuperAdmin(ctx, userId) {
+  if (String(userId) === String(ctx.adminId)) throw AppError.badRequest("You can't remove yourself. Ask another super admin.", "CANNOT_REMOVE_SELF");
+  const user = await User.findById(userId).select("+isSuperAdmin");
+  if (!user?.isSuperAdmin) throw AppError.notFound("Super admin not found");
+  if ((await User.countDocuments({ isSuperAdmin: true, isActive: true, _id: { $ne: user._id } })) === 0) throw AppError.badRequest("There must be at least one super admin", "LAST_SUPER_ADMIN");
+  user.isSuperAdmin = false;
+  await user.save();
+  await Session.updateMany({ userId: user._id, revokedAt: null }, { $set: { revokedAt: new Date() } });
+  await audit(ctx, { action: "superadmin.remove", targetType: "user", targetId: user._id, metadata: { email: user.email } });
+  return listSuperAdmins(ctx);
+}
+
+async function findSuperAdmin(userId) {
+  const user = await User.findById(userId).select("+isSuperAdmin");
+  if (!user?.isSuperAdmin) throw AppError.notFound("Super admin not found");
+  return user;
+}
+
+/** Name and email of any super admin (including yourself). */
+export async function updateSuperAdmin(ctx, userId, { name, email }) {
+  const user = await findSuperAdmin(userId);
+  const before = { name: user.name, email: user.email };
+  if (email && email !== user.email) {
+    if (await User.exists({ email, _id: { $ne: user._id } })) throw AppError.conflict("Another account already uses that email", "EMAIL_TAKEN");
+    user.email = email;
+  }
+  if (name) user.name = name;
+  await user.save();
+  await audit(ctx, { action: "superadmin.update", targetType: "user", targetId: user._id, metadata: { before, after: { name: user.name, email: user.email } } });
+  return listSuperAdmins(ctx);
+}
+
+/** Sets a new password for another super admin and signs them out everywhere. */
+export async function resetSuperAdminPassword(ctx, userId, { password }) {
+  if (String(userId) === String(ctx.adminId)) throw AppError.badRequest("Use \"Change my password\" for your own account", "USE_OWN_PASSWORD_CHANGE");
+  const user = await findSuperAdmin(userId);
+  user.passwordHash = await hashPassword(password);
+  await user.save();
+  await Session.updateMany({ userId: user._id, revokedAt: null }, { $set: { revokedAt: new Date() } });
+  await audit(ctx, { action: "superadmin.reset_password", targetType: "user", targetId: user._id });
+}
+
+/** Your own password: needs the current one; other devices are signed out, this one stays. */
+export async function changeOwnPassword(ctx, { currentPassword, newPassword }, refreshToken) {
+  const user = await User.findById(ctx.adminId).select("+passwordHash");
+  if (!user || !(await verifyPassword(currentPassword, user.passwordHash))) {
+    throw AppError.badRequest("Current password is incorrect", "WRONG_PASSWORD", [{ field: "currentPassword", message: "Current password is incorrect" }]);
+  }
+  user.passwordHash = await hashPassword(newPassword);
+  await user.save();
+  let keep = null;
+  try {
+    const payload = verifyRefreshToken(refreshToken);
+    if (payload.sub === String(user._id)) keep = payload.sid;
+  } catch {
+    // No valid cookie: sign out everywhere
+  }
+  const { modifiedCount } = await Session.updateMany({ userId: user._id, revokedAt: null, ...(keep ? { _id: { $ne: keep } } : {}) }, { $set: { revokedAt: new Date() } });
+  await audit(ctx, { action: "superadmin.change_own_password", targetType: "user", targetId: user._id });
+  return { signedOutSessions: modifiedCount };
 }

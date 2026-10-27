@@ -13,8 +13,8 @@ const userSchema = new mongoose.Schema(
     },
     passwordHash: { type: String, required: true, select: false },
     isActive: { type: Boolean, default: true },
-    // Platform-level administrator (manages every tenant). Never settable through
-    // the API — only via `npm run superadmin`. Hidden from queries by default.
+    // Platform-level administrator (manages every tenant). Set only through
+    // the CLI (`npm run superadmin`) or by another super admin in the console. Hidden from queries by default.
     isSuperAdmin: { type: Boolean, default: false, select: false },
     // Two-step login (authenticator app) for super admins; secrets encrypted at rest
     twoFactor: {

@@ -483,7 +483,7 @@ New WhatsApp message types: `homework` (refs `{ homeworkId, studentId }`) and `n
 ## Super admin (platform administration)
 
 A super admin manages **every** tenant and user. This is a flag on the user
-(`isSuperAdmin`), not a tenant role. It can **only** be set from the command line:
+(`isSuperAdmin`), not a tenant role. Create the first one from the command line:
 
 ```bash
 npm run superadmin -- create  --email admin@eduflow.com --name "Platform Admin"   # prompts for password
@@ -497,7 +497,8 @@ Use a dedicated account. A super admin's login gives a **platform token**
 
 - Platform tokens only work on `/api/admin/*`, and tenant tokens never work there.
 - Every admin request re-checks `isSuperAdmin` in the database, so `revoke` takes effect immediately.
-- The API cannot modify a super admin account. Use the CLI.
+- After that, super admins add and remove others in the console (`/api/admin/super-admins`). You can't remove yourself or the last super admin; adding or removing one ends that person's sessions.
+- The user routes can't edit, disable or reset a super admin account.
 - Every admin action is written to the `auditlogs` collection, with before and after values.
 - Rate limit: 300 requests per 15 min. Set `ADMIN_IP_ALLOWLIST` to limit which IPs can reach `/api/admin`.
 
@@ -539,7 +540,7 @@ Each school has a `subscription` (`status: trial | active | suspended`, `planId`
 - Plans are edited in the console. First run creates **Basic** (₹999/month, 300 students, no automatic WhatsApp, default) and **Pro** (₹1,999/month, unlimited, everything). Prices are in paise.
 - Payments are recorded by hand ("mark paid"). A payment extends the paid period from its current end (or today) by `periods` months or years and makes the plan active.
 - Access is cached for 60 s per school; changes from the console clear it.
-- `GET /api/tenant/status` (any member): `{ subscription, announcements, plans, support: { whatsapp, email } }` for the app's banners and the "Plan & billing" settings tab. Set `SUPPORT_WHATSAPP` and `SUPPORT_EMAIL` for the renew links.
+- `GET /api/tenant/status` (any member): `{ subscription, announcements, plans, support: { whatsapp, email } }` for the app's banners and the "Plan & billing" settings tab. The support WhatsApp number and email come from the console's Settings page.
 - Activity: the first request of each day per school writes a `tenantactivities` row and updates `tenant.lastActiveAt` (dashboard "active this week" and health tags).
 
 | Method | Route | Body / query | Notes |
@@ -559,6 +560,13 @@ Each school has a `subscription` (`status: trial | active | suspended`, `planId`
 | GET | `/api/admin/schools/:id/export` | | all of the school's data as JSON (DPDP access request) |
 | DELETE | `/api/admin/schools/:id` | `{ confirm: "<slug>" }` | deletes the school, all its data and accounts that belonged only to it |
 | GET / POST / PATCH | `/api/admin/plans[/:planId]` | plan | only one default plan |
+| GET / PUT | `/api/admin/settings` | `{ supportWhatsapp, supportEmail }` | support contact shown on schools' renew links |
+| GET | `/api/admin/super-admins` | | |
+| POST | `/api/admin/super-admins` | `{ email, name?, password? }` | promotes an existing account, or creates one (name and password required) |
+| PATCH | `/api/admin/super-admins/:userId` | `{ name?, email? }` | any super admin, including yourself |
+| POST | `/api/admin/super-admins/:userId/password` | `{ password }` | another super admin; ends their sessions, `204` |
+| POST | `/api/admin/account/password` | `{ currentPassword, newPassword }` | your own; signs out your other devices |
+| DELETE | `/api/admin/super-admins/:userId` | | not yourself, not the last one |
 | GET / POST / PATCH / DELETE | `/api/admin/announcements[/:id]` | `{ title, body, tone, linkUrl, linkLabel, startsAt, endsAt, active }` | banners in every school's app |
 
 ### Two-step login for super admins

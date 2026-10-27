@@ -53,11 +53,11 @@ async function findUserOrThrow(id) {
   return user;
 }
 
-/** Super admin accounts can only be changed from the CLI, never through the API. */
+/** Super admin accounts can't be edited, disabled or reset through the user routes (only added or removed as super admins). */
 function assertNotSuperAdmin(user) {
   if (user.isSuperAdmin) {
     throw AppError.forbidden(
-      "Super admin accounts can only be managed with `npm run superadmin`",
+      "Super admin accounts can't be changed here. Remove them as a super admin first (Console → Admins).",
       "SUPER_ADMIN_PROTECTED"
     );
   }

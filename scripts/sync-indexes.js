@@ -31,6 +31,7 @@ import "../src/models/StudentLeave.js";
 import "../src/models/Homework.js";
 import "../src/models/TenantActivity.js";
 import "../src/models/Announcement.js";
+import "../src/models/PlatformSettings.js";
 import "../src/models/SubscriptionPayment.js";
 import "../src/models/PlatformPlan.js";
 

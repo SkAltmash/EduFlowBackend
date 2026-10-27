@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { concessionSchema } from "./fees.concessions.js";
 import { PAYMENT_MODES } from "../../models/Payment.js";
 import { objectId } from "../auth/auth.validation.js";
 import { day } from "../attendance/attendance.validation.js";
@@ -56,16 +57,12 @@ export const assignPlanSchema = z
     grade: z.string().trim().max(50).optional(),
     section: z.string().trim().max(20).optional(),
     studentIds: z.array(objectId).max(2000).optional(),
-    concession: z
-      .object({
-        type: z.enum(["percent", "amount"]),
-        // percent: 0-100; amount: paise off each installment
-        value: z.number().min(0),
-        reason: z.string().trim().max(200).default(""),
-      })
-      .refine((c) => c.type !== "percent" || c.value <= 100, { message: "Percent must be 0–100", path: ["value"] })
-      .refine((c) => c.type !== "amount" || Number.isInteger(c.value), { message: "Amount must be in whole paise", path: ["value"] })
-      .optional(),
+    // Class-wide concession for students without their own
+    concession: concessionSchema.optional(),
+    // Per-student choices from the assign screen (null = none for this student)
+    concessions: z.array(z.object({ studentId: objectId, concession: concessionSchema.nullable() })).max(2000).default([]),
+    // Save the per-student choices on the students for later plans
+    remember: z.boolean().default(false),
   })
   .refine((v) => Boolean(v.grade) !== Boolean(v.studentIds?.length), "Choose a class or a list of students, not both");
 

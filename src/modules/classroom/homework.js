@@ -1,4 +1,5 @@
 // Homework / class diary: GET/POST /api/homework, GET/PATCH/DELETE /api/homework/:homeworkId
+import { requireFeature } from "../platform/subscription.js";
 import { Router } from "express";
 import { z } from "zod";
 import Homework from "../../models/Homework.js";
@@ -50,7 +51,7 @@ async function findOwned(user, id) {
 }
 
 const router = Router();
-router.use(authenticate, teachingStaff);
+router.use(authenticate, teachingStaff, requireFeature("homework"));
 idParam(router, "homeworkId");
 
 router.get("/", validateQuery(listQuery), async (req, res) => {

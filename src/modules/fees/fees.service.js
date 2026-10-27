@@ -7,6 +7,7 @@ import Student from "../../models/Student.js";
 import Tenant from "../../models/Tenant.js";
 import User from "../../models/User.js";
 import AppError from "../../utils/AppError.js";
+import { concessionLabel, discountFor as concessionDiscount, serializeConcession } from "./fees.concessions.js";
 
 // All amounts are integers in paise.
 
@@ -49,6 +50,8 @@ function serializeInvoice(inv, today) {
     amount: inv.amount,
     discount: inv.discount,
     discountReason: inv.discountReason || "",
+    // "concession" (follows the student's concession), "manual" (set on this due) or ""
+    discountSource: inv.discountSource || "",
     paid: inv.paid,
     balance: balanceOf(inv),
     status: invoiceStatus(inv, today),
@@ -123,9 +126,17 @@ export async function listPlans(tenantId, { archived }) {
       },
     },
   ]);
+  // Active students of the plan's class who don't have it yet (new admissions, moved in)
+  const missing = await Promise.all(
+    plans.map((p) => {
+      if (!p.grade || p.archived) return 0;
+      const assigned = stats.find((s) => String(s._id) === String(p._id))?.students ?? [];
+      return Student.countDocuments({ tenantId, status: "active", grade: p.grade, _id: { $nin: assigned } });
+    })
+  );
   const byPlan = new Map(stats.map((s) => [String(s._id), { students: s.students.length, billed: s.billed, paid: s.paid }]));
 
-  return { plans: plans.map((p) => serializePlan(p, byPlan.get(String(p._id)) ?? { students: 0, billed: 0, paid: 0 })) };
+  return { plans: plans.map((p, i) => serializePlan(p, { ...(byPlan.get(String(p._id)) ?? { students: 0, billed: 0, paid: 0 }), missing: missing[i] })) };
 }
 
 export async function getPlan(tenantId, id) {
@@ -164,19 +175,87 @@ export async function updatePlan(tenantId, id, data) {
 
   Object.assign(plan, data);
   await plan.save();
-  return getPlan(tenantId, plan._id);
+  const duesUpdated = data.installments ? await syncPlanDues(tenantId, plan) : 0;
+  return { ...(await getPlan(tenantId, plan._id)), duesUpdated };
 }
 
+/**
+ * Brings students' dues in line with an edited plan. Unpaid dues take the new items,
+ * amount, label and due date (their concession is worked out again); dues with a payment
+ * only take the new label and due date, so collected money always matches its receipt.
+ */
+async function syncPlanDues(tenantId, plan) {
+  const dues = await Invoice.find({ tenantId, planId: plan._id });
+  const students = await Student.find({ _id: { $in: [...new Set(dues.map((d) => String(d.studentId)))] } }, { feeConcession: 1 }).lean();
+  const concessionOf = new Map(students.map((s) => [String(s._id), s.feeConcession?.type ? s.feeConcession : null]));
+  let changed = 0;
+  for (const d of dues) {
+    const inst = plan.installments.id(d.installmentId);
+    if (!inst) continue;
+    const before = JSON.stringify([d.label, d.dueDate, d.amount, d.discount]);
+    d.label = inst.label;
+    d.dueDate = inst.dueDate;
+    d.planName = plan.name;
+    if (d.paid === 0) {
+      const amount = sum(inst.items, (it) => it.amount);
+      d.items = inst.items.map((it) => ({ name: it.name, amount: it.amount }));
+      d.amount = amount;
+      if (d.discountSource === "manual") d.discount = Math.min(d.discount, amount);
+      else {
+        const c = concessionOf.get(String(d.studentId));
+        d.discount = concessionDiscount(amount, c);
+        d.discountReason = d.discount ? concessionLabel(c) : "";
+        d.discountSource = d.discount ? "concession" : "";
+      }
+    }
+    if (JSON.stringify([d.label, d.dueDate, d.amount, d.discount]) !== before) {
+      await d.save();
+      changed += 1;
+    }
+  }
+  return changed;
+}
+
+/** Takes one plan off one student (e.g. assigned by mistake), when nothing was paid on it. */
+export async function removePlanFromStudent(tenantId, studentId, planId) {
+  const dues = await Invoice.find({ tenantId, studentId, planId }, { paid: 1 }).lean();
+  if (!dues.length) throw AppError.notFound("This student doesn't have that plan");
+  if (dues.some((d) => d.paid > 0)) {
+    throw AppError.conflict("Some of this plan's fees are already paid. Void those receipts first.", "PLAN_HAS_PAYMENTS");
+  }
+  const { deletedCount } = await Invoice.deleteMany({ tenantId, studentId, planId });
+  return { duesDeleted: deletedCount };
+}
+
+/**
+ * Deletes a plan together with its dues, as long as nothing has been collected on it
+ * (e.g. a demo plan, or one assigned by mistake). Plans with payments are archived instead.
+ */
 export async function deletePlan(tenantId, id) {
   const plan = await findPlanOrThrow(tenantId, id);
-  if (await Invoice.exists({ tenantId, planId: plan._id })) {
-    throw AppError.conflict("This plan has been assigned to students. Archive it instead.", "PLAN_IN_USE");
+  const [collected] = await Invoice.aggregate([{ $match: { tenantId: oid(tenantId), planId: plan._id, paid: { $gt: 0 } } }, { $group: { _id: null, paid: { $sum: "$paid" }, dues: { $sum: 1 } } }]);
+  if (collected) {
+    throw AppError.conflict(
+      `${formatMoneyText(collected.paid)} has been collected on this plan, so it can't be deleted. Void those receipts first, or archive the plan to hide it.`,
+      "PLAN_HAS_PAYMENTS"
+    );
   }
-  await plan.deleteOne();
+  let duesDeleted = 0;
+  await mongoose.connection.transaction(async (session) => {
+    duesDeleted = (await Invoice.deleteMany({ tenantId, planId: plan._id }, { session })).deletedCount;
+    await FeePlan.deleteOne({ _id: plan._id, tenantId }, { session });
+  });
+  return { duesDeleted };
 }
 
-/** Creates the plan's dues for each chosen student. Students who already have them are skipped. */
-export async function assignPlan(tenantId, id, { grade, section, studentIds, concession }) {
+const formatMoneyText = (paise) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(paise / 100);
+
+/**
+ * Creates the plan's dues for each chosen student. Students who already have them are skipped.
+ * Each student's concession is, in order: the one given for them here, their saved concession,
+ * then the class-wide `concession`. With `remember`, concessions given here are saved on the student.
+ */
+export async function assignPlan(tenantId, id, { grade, section, studentIds, concession, concessions = [], remember = false }, user) {
   const plan = await findPlanOrThrow(tenantId, id);
   if (plan.archived) throw AppError.badRequest("This plan is archived", "PLAN_ARCHIVED");
 
@@ -187,19 +266,31 @@ export async function assignPlan(tenantId, id, { grade, section, studentIds, con
     filter.status = "active";
     if (section !== undefined && section !== "") filter.section = section;
   }
-  const students = await Student.find(filter, { grade: 1, section: 1 }).lean();
+  const students = await Student.find(filter, { grade: 1, section: 1, feeConcession: 1 }).lean();
   if (students.length === 0) throw AppError.badRequest("No matching students", "NO_STUDENTS");
 
-  const discountFor = (amount) => {
-    if (!concession || concession.value === 0) return 0;
-    const d = concession.type === "percent" ? Math.round((amount * concession.value) / 100) : concession.value;
-    return Math.min(d, amount);
-  };
+  // Per-student choices from the assign screen (null = no concession for this student)
+  const chosen = new Map(concessions.map((c) => [c.studentId, c.concession]));
+  const classWide = concession && (concession.value > 0 || concession.type === "free") ? concession : null;
+  const concessionOf = (s) => (chosen.has(String(s._id)) ? chosen.get(String(s._id)) : s.feeConcession?.type ? s.feeConcession : classWide);
+
+  if (remember && chosen.size) {
+    const name = user ? ((await User.findById(user.id, { name: 1 }).lean())?.name ?? "") : "";
+    await Student.bulkWrite(
+      [...chosen.entries()].map(([sid, c]) => ({
+        updateOne: {
+          filter: { _id: sid, tenantId },
+          update: c ? { $set: { feeConcession: { ...c, updatedBy: user?.id, updatedByName: name, updatedAt: new Date() } } } : { $unset: { feeConcession: "" } },
+        },
+      }))
+    );
+  }
 
   const docs = students.flatMap((s) =>
     plan.installments.map((inst) => {
       const amount = sum(inst.items, (it) => it.amount);
-      const discount = discountFor(amount);
+      const c = concessionOf(s);
+      const discount = concessionDiscount(amount, c);
       return {
         tenantId: oid(tenantId),
         studentId: s._id,
@@ -211,7 +302,8 @@ export async function assignPlan(tenantId, id, { grade, section, studentIds, con
         items: inst.items.map((it) => ({ name: it.name, amount: it.amount })),
         amount,
         discount,
-        discountReason: discount ? concession.reason : "",
+        discountReason: discount ? concessionLabel(c) : "",
+        discountSource: discount ? "concession" : "",
         paid: 0,
         grade: s.grade || "",
         section: s.section || "",
@@ -368,6 +460,7 @@ export async function studentLedger(tenantId, studentId, { today = utcToday() } 
       guardianName: student.guardianName || "",
       guardianPhone: student.guardianPhone || "",
       status: student.status,
+      concession: serializeConcession(student.feeConcession),
     },
     dues,
     payments: payments.map(serializePayment),
@@ -389,6 +482,8 @@ export async function updateInvoice(tenantId, id, { discount, discountReason, du
       throw AppError.badRequest("Discount can't be more than the unpaid amount", "DISCOUNT_TOO_HIGH");
     }
     inv.discount = discount;
+    // A one-off change on this due: concession updates won't overwrite it
+    inv.discountSource = discount ? "manual" : "";
   }
   if (discountReason !== undefined) inv.discountReason = discountReason;
   if (dueDate !== undefined) inv.dueDate = dueDate;
@@ -563,11 +658,17 @@ export async function getReceipt(tenantId, id) {
   if (!payment) throw AppError.notFound("Payment not found");
   const [tenant, open] = await Promise.all([
     Tenant.findById(tenantId).lean(),
-    Invoice.find({ tenantId, studentId: payment.studentId }, { amount: 1, discount: 1, paid: 1 }).lean(),
+    Invoice.find({ tenantId, studentId: payment.studentId }, { amount: 1, discount: 1, discountReason: 1, paid: 1, label: 1, planName: 1 }).lean(),
   ]);
+  // Concessions on the dues this payment went to, shown on the receipt
+  const paidFor = new Set(payment.allocations.map((a) => String(a.invoiceId)));
+  const concessions = open
+    .filter((i) => paidFor.has(String(i._id)) && i.discount > 0)
+    .map((i) => ({ label: i.label, planName: i.planName, fee: i.amount, discount: i.discount, reason: i.discountReason || "Concession" }));
   return {
     payment: serializePayment(payment),
     school: { name: tenant?.name ?? "" },
+    concessions,
     // The student's balance right now (after this and any later payments)
     currentBalance: sum(open, (i) => Math.max(0, balanceOf(i))),
   };

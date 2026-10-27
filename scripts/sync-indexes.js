@@ -29,6 +29,10 @@ import "../src/models/CorrectionRequest.js";
 import "../src/models/StudentNote.js";
 import "../src/models/StudentLeave.js";
 import "../src/models/Homework.js";
+import "../src/models/TenantActivity.js";
+import "../src/models/Announcement.js";
+import "../src/models/SubscriptionPayment.js";
+import "../src/models/PlatformPlan.js";
 
 await connectDB();
 for (const model of Object.values(mongoose.models)) {

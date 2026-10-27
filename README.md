@@ -270,6 +270,24 @@ integers in paise** (₹1 = 100), so totals never have rounding errors.
 | GET | `/api/fees/payments/:paymentId` | | receipt: payment, school name, current balance |
 | POST | `/api/fees/payments/:paymentId/void` | `{ reason }` | owner/admin only |
 
+### Concessions ([fees.concessions.js](src/modules/fees/fees.concessions.js))
+
+Owners, admins and accountants. A **standing concession on the student** is applied to their
+unpaid dues and to every plan assigned later. Types: `percent` (value 0-100), `amount` (paise
+off each installment), `fixed` (pays `value` paise per installment), `free`.
+
+| Method | Path | Body | Notes |
+| --- | --- | --- | --- |
+| PUT | `/api/fees/students/:studentId/concession` | `{ concession: { type, value, reason?, presetId? } \| null }` | updates unpaid dues; returns `duesUpdated` |
+| GET | `/api/fees/plans/:planId/preview` | `?grade=&section=` | students with saved concessions and whether they already have the plan |
+| POST | `/api/fees/plans/:planId/assign` | `{ grade, section?, concessions?: [{ studentId, concession \| null }], remember? }` | per-student choice > saved concession > class-wide `concession` |
+| GET | `/api/fees/concessions` | `?from=&to=` | who pays less, by how much, totals by reason |
+| GET / PUT | `/api/fees/concession-presets` | `{ presets: [{ id?, name, type, value }] }` | ready-made choices (defaults: Sibling 10%, Staff child 50%, Scholarship 25%, RTE free) |
+
+Rules: settled dues never change; a discount can't go below what's already paid; a discount set
+by hand on one due (`PATCH /api/fees/dues/:id`, `discountSource: "manual"`) is never overwritten
+by concession changes. Receipts list the concessions on the dues they paid.
+
 ## WhatsApp ([src/modules/whatsapp](src/modules/whatsapp))
 
 Fee receipts, fee reminders, absence/late alerts and monthly attendance reports
@@ -503,6 +521,56 @@ All routes below need `Authorization: Bearer <platform token>`.
 | POST | `/api/admin/users/:userId/reset-password` | `{ password }` | sets a new password, ends all sessions, returns `204` |
 | GET | `/api/admin/audit-logs` | `?action=&actorId=&targetId=&page=&limit=` | newest first |
 
+### Subscriptions & plans ([src/modules/platform](src/modules/platform))
+
+Each school has a `subscription` (`status: trial | active | suspended`, `planId`, `cycle`, `trialEndsAt`, `currentPeriodEnd`). What the school can do comes from `computeAccess()` in [subscription.js](src/modules/platform/subscription.js):
+
+| Status shown | When | Effect |
+|---|---|---|
+| `none` | school created before subscriptions (no `subscription.status`) | full access, no limits |
+| `trial` | new signups: 7 days on the default plan | plan limits and features |
+| `active` | paid period running | plan limits and features |
+| `overdue` | up to 3 days after the paid period ends | still works; owners see "Payment due" |
+| `expired` | trial ended, or 3 days past the paid period | **read-only** |
+| `suspended` | set by a super admin | **read-only** |
+
+- Read-only: `authenticate` answers every non-GET request with `402 SUBSCRIPTION_READONLY`, except `/api/auth/*` and super admin impersonation. Staff can still view everything and change their own password.
+- Limits: `studentLimit` (0 = unlimited) is checked when adding and importing students (`402 STUDENT_LIMIT`). Features `whatsappApi`, `homework`, `timetable`, `performance` guard their routes (`402 FEATURE_NOT_IN_PLAN`). A super admin can override both per school.
+- Plans are edited in the console. First run creates **Basic** (₹999/month, 300 students, no automatic WhatsApp, default) and **Pro** (₹1,999/month, unlimited, everything). Prices are in paise.
+- Payments are recorded by hand ("mark paid"). A payment extends the paid period from its current end (or today) by `periods` months or years and makes the plan active.
+- Access is cached for 60 s per school; changes from the console clear it.
+- `GET /api/tenant/status` (any member): `{ subscription, announcements, plans, support: { whatsapp, email } }` for the app's banners and the "Plan & billing" settings tab. Set `SUPPORT_WHATSAPP` and `SUPPORT_EMAIL` for the renew links.
+- Activity: the first request of each day per school writes a `tenantactivities` row and updates `tenant.lastActiveAt` (dashboard "active this week" and health tags).
+
+| Method | Route | Body / query | Notes |
+|---|---|---|---|
+| GET | `/api/admin/dashboard` | | MRR/ARR, conversion, active this week, 12 weeks of signups, 12 months of revenue, setup funnel, top schools, action lists |
+| GET | `/api/admin/search` | `?q=` | schools by name, ID, phone, email or city; people by name or email |
+| GET | `/api/admin/system` | | API uptime and memory, DB ping, server errors since restart, WhatsApp last 24 h, sessions, encryption |
+| GET | `/api/admin/schools` | `?search=&status=all\|none\|trial\|active\|paying\|overdue\|expired\|suspended&health=all\|active\|quiet\|never\|new&page=&limit=` | with students, members and MRR |
+| GET | `/api/admin/schools/:id` | | profile, members, usage, payments, notes, last 20 audit entries |
+| PATCH | `/api/admin/schools/:id/subscription` | `{ planId?, status?, cycle?, trialEndsAt?, currentPeriodEnd? }` | |
+| POST | `/api/admin/schools/:id/extend-trial` | `{ days }` | from the later of today and the current trial end |
+| POST | `/api/admin/schools/:id/payments` | `{ planId?, amount, method, reference, cycle, periods, note }` | "mark paid" |
+| DELETE | `/api/admin/schools/:id/payments/:paymentId` | | doesn't shorten the period |
+| PATCH | `/api/admin/schools/:id/limits` | `{ studentLimit: number\|null, features: { key: bool\|null } }` | `null` = follow the plan |
+| POST / DELETE | `/api/admin/schools/:id/notes[/:noteId]` | `{ text }` | private super admin notes |
+| POST | `/api/admin/schools/:id/logout-all` | | ends every session in the school |
+| GET | `/api/admin/schools/:id/export` | | all of the school's data as JSON (DPDP access request) |
+| DELETE | `/api/admin/schools/:id` | `{ confirm: "<slug>" }` | deletes the school, all its data and accounts that belonged only to it |
+| GET / POST / PATCH | `/api/admin/plans[/:planId]` | plan | only one default plan |
+| GET / POST / PATCH / DELETE | `/api/admin/announcements[/:id]` | `{ title, body, tone, linkUrl, linkLabel, startsAt, endsAt, active }` | banners in every school's app |
+
+### Two-step login for super admins
+
+Time-based codes (RFC 6238, any authenticator app). Needs `DATA_ENCRYPTION_KEY`: the secret is stored encrypted.
+
+1. `POST /api/admin/2fa/setup` returns `{ secret, otpauthUrl }`.
+2. `POST /api/admin/2fa/enable { code }` turns it on. `POST /api/admin/2fa/disable { code }` turns it off; `GET /api/admin/2fa` shows the status.
+3. Login then returns `{ requiresTwoFactor: true, twoFactorToken }` (valid 5 minutes) instead of tokens. Send `POST /api/auth/two-factor { token, code }` to finish signing in.
+
+Lost the phone? Clear it from the server: `db.users.updateOne({ email }, { $unset: { twoFactor: "" } })`.
+
 ## MongoDB indexes
 
 | Collection | Index | Purpose |
@@ -525,6 +593,9 @@ All routes below need `Authorization: Bearer <platform token>`.
 | exams | `{ tenantId, grade, section, date }`, `{ tenantId, date }` | a class's tests; tests in a month |
 | examresults | `{ tenantId, examId, studentId }` unique, `{ tenantId, studentId }` | one marks record per student per test; a student's monthly report |
 | schoolsettings | `{ tenantId }` unique | grading scale per school |
+| subscriptionpayments | `{ tenantId, createdAt: -1 }`, `{ createdAt: -1 }` | a school's payments; revenue by month |
+| announcements | `{ active, startsAt: -1 }` | live announcements |
+| tenantactivities | `{ tenantId, day }` unique, `{ day }` | one row per school per active day |
 | auditlogs | `{ createdAt: -1 }`, `{ actorId, createdAt }`, `{ targetId, createdAt }`, `{ action, createdAt }` | browse and filter the audit trail |
 
 In development Mongoose builds these automatically. In production `autoIndex`

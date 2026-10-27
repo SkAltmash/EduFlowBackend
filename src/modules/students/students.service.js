@@ -3,6 +3,7 @@ import Student from "../../models/Student.js";
 import AppError from "../../utils/AppError.js";
 import { createStudentSchema } from "./students.validation.js";
 import { loadClassList } from "../academics/class-names.js";
+import { assertStudentCapacity } from "../platform/subscription.js";
 
 // Natural ordering for values like "Grade 2" < "Grade 10" and "A-9" < "A-10"
 const COLLATION = { locale: "en", numericOrdering: true };
@@ -183,6 +184,7 @@ export async function getStudent(tenantId, id) {
 
 export async function createStudent(tenantId, userId, input) {
   const data = applyClass(await loadClassList(tenantId), input);
+  if ((data.status ?? "active") === "active") await assertStudentCapacity(tenantId, 1);
   try {
     const student = await Student.create({ ...compact(data), tenantId, createdBy: userId, updatedBy: userId });
     return { student: serializeStudent(student) };
@@ -265,6 +267,8 @@ export async function importStudents(tenantId, userId, { students: rows, onDupli
   const existingNos = new Set(existing.map((s) => s.admissionNo));
 
   const toInsert = valid.filter((v) => !existingNos.has(v.data.admissionNo));
+  // The plan's student limit counts the new active students in this file
+  await assertStudentCapacity(tenantId, toInsert.filter((v) => (v.data.status ?? "active") === "active").length);
   const existingRows = valid.filter((v) => existingNos.has(v.data.admissionNo));
 
   let created = 0;

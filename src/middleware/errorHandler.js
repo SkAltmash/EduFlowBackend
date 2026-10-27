@@ -2,6 +2,9 @@ import mongoose from "mongoose";
 import AppError from "../utils/AppError.js";
 import env from "../config/env.js";
 
+/** Unexpected server errors since this process started (shown in the super admin console). */
+export const errorStats = { count: 0, since: new Date().toISOString(), last: null };
+
 export function notFoundHandler(req, res) {
   res.status(404).json({ error: { code: "NOT_FOUND", message: "Route not found" } });
 }
@@ -31,6 +34,8 @@ export function errorHandler(err, req, res, next) {
   }
 
   console.error(err);
+  errorStats.count += 1;
+  errorStats.last = { at: new Date().toISOString(), path: `${req.method} ${req.originalUrl.split("?")[0]}`, message: String(err?.message ?? err).slice(0, 200) };
   res.status(500).json({
     error: {
       code: "INTERNAL_ERROR",

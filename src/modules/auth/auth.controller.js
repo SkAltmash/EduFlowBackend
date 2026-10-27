@@ -27,6 +27,10 @@ export async function login(req, res) {
   sendAuthResult(res, 200, result);
 }
 
+export async function twoFactor(req, res) {
+  sendAuthResult(res, 200, await authService.completeTwoFactor(req.body, requestMeta(req)));
+}
+
 export async function selectTenant(req, res) {
   const result = await authService.selectTenant(req.user.id, req.body.tenantId, {
     currentRefreshToken: req.cookies?.[REFRESH_COOKIE_NAME],

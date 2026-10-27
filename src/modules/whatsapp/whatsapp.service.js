@@ -12,6 +12,7 @@ import Attendance from "../../models/Attendance.js";
 import Homework from "../../models/Homework.js";
 import Notice from "../../models/Notice.js";
 import AppError from "../../utils/AppError.js";
+import { getAccess } from "../platform/subscription.js";
 import { canEncrypt, decrypt, encrypt } from "../../utils/crypto.js";
 import * as messages from "./whatsapp.messages.js";
 import * as exams from "../exams/exams.service.js";
@@ -431,6 +432,9 @@ export async function logOpened(tenantId, user, { type, entries }) {
 export async function send(tenantId, user, { type, refs, today }) {
   const { cfg, token } = await apiCredentials(tenantId);
   if (cfg.mode !== "api") throw AppError.badRequest("Automatic sending is turned off. Turn it on in WhatsApp settings.", "API_DISABLED");
+  if (!user.isImpersonating && !(await getAccess(tenantId)).features.whatsappApi) {
+    throw new AppError(402, "Automatic WhatsApp isn't part of your plan. Use click-to-send, or upgrade your plan.", "FEATURE_NOT_IN_PLAN");
+  }
   const template = cfg.templates?.[type];
   if (!template?.name) {
     throw AppError.badRequest(`Add the approved template name for “${messages.TEMPLATES[type].title}” in WhatsApp settings.`, "TEMPLATE_MISSING");

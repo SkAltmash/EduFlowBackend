@@ -56,3 +56,8 @@ export const changePasswordSchema = z
     newPassword: strongPassword,
   })
   .refine((v) => v.currentPassword !== v.newPassword, { message: "Choose a password different from the current one", path: ["newPassword"] });
+
+export const twoFactorSchema = z.object({
+  token: z.string().min(10).max(2000),
+  code: z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code"),
+});

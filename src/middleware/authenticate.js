@@ -3,6 +3,9 @@ import AppError from "../utils/AppError.js";
 import User from "../models/User.js";
 import Tenant from "../models/Tenant.js";
 import { TOKEN_TYPES, verifyAccessToken } from "../utils/jwt.js";
+import { getAccess, recordActivity } from "../modules/platform/subscription.js";
+
+const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 function extractBearerToken(req) {
   const header = req.get("authorization");
@@ -57,6 +60,24 @@ export async function authenticate(req, res, next) {
     role: payload.role,
     ...(payload.impersonation ? { isImpersonating: true } : {}),
   };
+
+  // A super admin looking around doesn't count as the school using EduFlow, and isn't blocked
+  if (!payload.impersonation) {
+    recordActivity(payload.tenantId);
+    // Expired or suspended: everything stays readable, nothing can change (own account excepted)
+    if (!READ_METHODS.has(req.method) && !req.baseUrl.startsWith("/api/auth")) {
+      const access = await getAccess(payload.tenantId);
+      if (access.readOnly) {
+        throw new AppError(
+          402,
+          access.status === "suspended"
+            ? "This school's EduFlow account is on hold. Contact EduFlow support to restore it."
+            : "Your EduFlow plan has ended, so the app is read-only. Renew to add or change anything.",
+          "SUBSCRIPTION_READONLY"
+        );
+      }
+    }
+  }
   next();
 }
 

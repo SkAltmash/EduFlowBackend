@@ -27,6 +27,18 @@ const studentSchema = new mongoose.Schema(
     admissionDate: { type: Date },
     status: { type: String, enum: STUDENT_STATUSES, default: "active" },
     notes: { type: String, trim: true, maxlength: 2000 },
+    // Standing fee concession: applied to unpaid dues now and to plans assigned later.
+    // type: percent (value 0-100), amount (paise off each installment),
+    // fixed (pays `value` paise per installment), free (nothing to pay).
+    feeConcession: {
+      type: { type: String, enum: ["percent", "amount", "fixed", "free"] },
+      value: { type: Number, min: 0 },
+      reason: { type: String, trim: true, maxlength: 100 },
+      presetId: { type: mongoose.Schema.Types.ObjectId },
+      updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      updatedByName: String,
+      updatedAt: Date,
+    },
     // One entry per finished academic year, written by year-end promotion
     classHistory: [
       {

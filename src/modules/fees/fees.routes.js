@@ -22,6 +22,8 @@ import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validateBody, validateQuery } from "../../middleware/validate.js";
 import AppError from "../../utils/AppError.js";
+import { mountConcessionRoutes } from "./fees.concessions.js";
+import * as feesService from "./fees.service.js";
 
 const router = Router();
 
@@ -38,6 +40,10 @@ for (const name of ["planId", "studentId", "invoiceId", "paymentId"]) {
 }
 
 router.get("/summary", validateQuery(summaryQuery), controller.summary);
+mountConcessionRoutes(router);
+router.delete("/students/:studentId/plans/:planId", async (req, res) =>
+  res.json(await feesService.removePlanFromStudent(req.user.tenantId, req.params.studentId, req.params.planId))
+);
 
 router.get("/plans", validateQuery(listPlansQuery), controller.listPlans);
 router.post("/plans", validateBody(createPlanSchema), controller.createPlan);

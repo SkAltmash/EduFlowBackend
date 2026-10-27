@@ -1,5 +1,6 @@
 // Syllabus progress: GET /api/syllabus?grade=&subject=, POST /api/syllabus (add topics),
 // PATCH/DELETE /api/syllabus/:topicId
+import { requireFeature } from "../platform/subscription.js";
 import { Router } from "express";
 import { z } from "zod";
 import SyllabusTopic from "../../models/SyllabusTopic.js";
@@ -19,7 +20,7 @@ async function assertMayEdit(user, grade, section, subj) {
 }
 
 const router = Router();
-router.use(authenticate, teachingStaff);
+router.use(authenticate, teachingStaff, requireFeature("homework"));
 idParam(router, "topicId");
 
 router.get("/", validateQuery(z.object({ grade: z.string().trim().min(1).max(50), subject })), async (req, res) => {

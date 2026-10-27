@@ -16,6 +16,9 @@ const invoiceSchema = new mongoose.Schema(
     amount: { type: Number, required: true, min: 0 },
     discount: { type: Number, default: 0, min: 0 },
     discountReason: { type: String, trim: true, maxlength: 200, default: "" },
+    // Where the discount came from: the student's concession (kept in sync with it) or a
+    // one-off edit on this due (never overwritten by concession changes)
+    discountSource: { type: String, enum: ["", "concession", "manual"], default: "" },
     paid: { type: Number, default: 0, min: 0 },
     // Class when the due was created, for class-wise reports
     grade: { type: String, default: "" },

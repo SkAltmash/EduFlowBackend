@@ -8,6 +8,7 @@ import Membership, { ROLES } from "../../models/Membership.js";
 import Session from "../../models/Session.js";
 import AuditLog from "../../models/AuditLog.js";
 import AppError from "../../utils/AppError.js";
+import { startTrial } from "../platform/subscription.js";
 import { hashPassword, verifyPassword } from "../../utils/password.js";
 import {
   generateTokenId,
@@ -16,8 +17,13 @@ import {
   signPlatformToken,
   signRefreshToken,
   signTenantSelectionToken,
+  signTwoFactorToken,
+  TOKEN_TYPES,
+  verifyAccessToken,
   verifyRefreshToken,
 } from "../../utils/jwt.js";
+import { decrypt } from "../../utils/crypto.js";
+import { verifyCode } from "../platform/totp.js";
 
 const ROTATION_GRACE_MS = 30 * 1000;
 
@@ -219,6 +225,9 @@ export async function register({ name, email, password, tenantName }, meta) {
     throw err;
   }
 
+  // Every new school starts on the free trial
+  await startTrial(tenant);
+
   return issueAuthResult({ user, tenant, role: ROLES.OWNER, meta });
 }
 
@@ -232,6 +241,10 @@ export async function login({ email, password }, meta) {
   }
 
   if (user.isSuperAdmin) {
+    // Two-step login: the password alone isn't enough for platform access
+    if (user.twoFactor?.enabled) {
+      return { requiresTenantSelection: false, requiresTwoFactor: true, twoFactorToken: signTwoFactorToken(user._id) };
+    }
     return { requiresTenantSelection: false, ...(await issuePlatformAuthResult({ user, meta })) };
   }
 
@@ -440,4 +453,21 @@ export async function changePassword(actor, { currentPassword, newPassword }, cu
     { $set: { revokedAt: new Date() } }
   );
   return { signedOutSessions: modifiedCount };
+}
+
+/** Second step of a super admin's login: the 6-digit code from their authenticator app. */
+export async function completeTwoFactor({ token, code }, meta) {
+  let payload;
+  try {
+    payload = verifyAccessToken(token, [TOKEN_TYPES.TWO_FACTOR]);
+  } catch {
+    throw AppError.unauthorized("That took too long. Sign in again.", "TWO_FACTOR_EXPIRED");
+  }
+  const user = await User.findById(payload.sub).select("+isSuperAdmin +twoFactor.secretEnc");
+  const secret = user?.twoFactor?.enabled ? decrypt(user.twoFactor.secretEnc) : null;
+  if (!user?.isActive || !user.isSuperAdmin || !secret) throw INVALID_CREDENTIALS();
+  if (!verifyCode(secret, code)) {
+    throw AppError.unauthorized("That code isn't right. Check your authenticator app and try again.", "TWO_FACTOR_INVALID");
+  }
+  return { requiresTenantSelection: false, ...(await issuePlatformAuthResult({ user, meta })) };
 }

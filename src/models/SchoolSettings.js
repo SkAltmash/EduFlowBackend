@@ -19,6 +19,14 @@ const schoolSettingsSchema = new mongoose.Schema(
       academicYearStart: { type: Number, min: 1, max: 12, default: 4 },
       receiptNote: { type: String, trim: true, maxlength: 300, default: "" },
     },
+    // One-tap concessions for fee staff, e.g. "Sibling 10%", "RTE free"
+    concessionPresets: [
+      {
+        name: { type: String, required: true, trim: true, maxlength: 60 },
+        type: { type: String, enum: ["percent", "amount", "fixed", "free"], required: true },
+        value: { type: Number, min: 0, default: 0 },
+      },
+    ],
     grading: {
       scale: { type: String, enum: ["cbse", "simple"], default: "cbse" },
       passPercent: { type: Number, min: 0, max: 100, default: 33 },

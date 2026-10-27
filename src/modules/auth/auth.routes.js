@@ -1,6 +1,6 @@
 import { Router } from "express";
 import * as controller from "./auth.controller.js";
-import { changePasswordSchema, loginSchema, registerSchema, selectTenantSchema, updateMeSchema } from "./auth.validation.js";
+import { changePasswordSchema, loginSchema, registerSchema, selectTenantSchema, twoFactorSchema, updateMeSchema } from "./auth.validation.js";
 import { validateBody } from "../../middleware/validate.js";
 import { authenticate, authenticateForTenantSelection } from "../../middleware/authenticate.js";
 import { loginLimiter, refreshLimiter, registerLimiter } from "../../middleware/rateLimit.js";
@@ -16,6 +16,7 @@ router.post(
   validateBody(selectTenantSchema),
   controller.selectTenant
 );
+router.post("/two-factor", loginLimiter, validateBody(twoFactorSchema), controller.twoFactor);
 router.post("/refresh", refreshLimiter, controller.refresh);
 router.post("/logout", controller.logout);
 router.get("/me", authenticate, controller.me);

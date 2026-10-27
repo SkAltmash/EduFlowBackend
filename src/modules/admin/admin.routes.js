@@ -16,6 +16,7 @@ import { requireSuperAdmin } from "../../middleware/requireSuperAdmin.js";
 import { adminIpAllowlist } from "../../middleware/ipAllowlist.js";
 import { adminLimiter } from "../../middleware/rateLimit.js";
 import AppError from "../../utils/AppError.js";
+import { adminPlatformRouter } from "../platform/platform.routes.js";
 
 const router = Router();
 
@@ -47,5 +48,8 @@ router.get("/users", validateQuery(listUsersQuery), controller.listUsers);
 router.get("/users/:userId", controller.getUser);
 router.patch("/users/:userId", validateBody(updateUserSchema), controller.updateUser);
 router.post("/users/:userId/reset-password", validateBody(resetPasswordSchema), controller.resetPassword);
+
+// Console: dashboard, schools, plans, announcements, search, system, two-step login
+router.use(adminPlatformRouter);
 
 export default router;

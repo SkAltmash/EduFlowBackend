@@ -10,6 +10,8 @@ export const TOKEN_TYPES = Object.freeze({
   TENANT_SELECTION: "tenant_selection",
   // Super admin token for /api/admin/*. Not tied to any tenant.
   PLATFORM: "platform",
+  // Password checked, waiting for the super admin's authenticator code (POST /api/auth/two-factor)
+  TWO_FACTOR: "two_factor",
 });
 
 const ALGORITHM = "HS256";
@@ -59,6 +61,10 @@ export function signTenantSelectionToken(userId) {
     env.JWT_ACCESS_SECRET,
     { ...baseSignOptions, expiresIn: TENANT_SELECTION_TTL }
   );
+}
+
+export function signTwoFactorToken(userId) {
+  return jwt.sign({ sub: String(userId), type: TOKEN_TYPES.TWO_FACTOR }, env.JWT_ACCESS_SECRET, { ...baseSignOptions, expiresIn: "5m" });
 }
 
 export function signRefreshToken({ userId, sessionId, jti, expiresAt }) {

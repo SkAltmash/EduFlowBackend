@@ -1,5 +1,6 @@
 // Weekly timetable: GET /api/timetable?grade=&section= (a class) or ?mine=1 (my periods),
 // PUT /api/timetable (replace one class's week; owners/admins)
+import { requireFeature } from "../platform/subscription.js";
 import { Router } from "express";
 import { z } from "zod";
 import mongoose from "mongoose";
@@ -34,7 +35,7 @@ export async function periodsFor(tenantId, userId, day) {
 }
 
 const router = Router();
-router.use(authenticate);
+router.use(authenticate, requireFeature("timetable"));
 
 router.get("/", validateQuery(getQuery), async (req, res) => {
   const { grade, section, mine } = req.validatedQuery;

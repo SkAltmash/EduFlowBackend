@@ -24,6 +24,7 @@ import correctionsRouter from "./modules/classroom/corrections.js";
 import noticesRouter from "./modules/classroom/notices.js";
 import timetableRouter from "./modules/classroom/timetable.js";
 import syllabusRouter from "./modules/classroom/syllabus.js";
+import { tenantStatusRouter } from "./modules/platform/platform.routes.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 
 const app = express();
@@ -67,6 +68,7 @@ app.get("/", (req, res) => {
 
 app.use("/api/health", healthRouter);
 app.use("/api/auth", authRouter);
+app.use("/api/tenant", tenantStatusRouter);
 app.use("/api/tenant", tenantRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api/students", studentsRouter);

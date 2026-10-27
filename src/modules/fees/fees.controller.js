@@ -6,11 +6,8 @@ export const listPlans = async (req, res) => res.json(await feesService.listPlan
 export const getPlan = async (req, res) => res.json(await feesService.getPlan(tid(req), req.params.planId));
 export const createPlan = async (req, res) => res.status(201).json(await feesService.createPlan(tid(req), req.user.id, req.body));
 export const updatePlan = async (req, res) => res.json(await feesService.updatePlan(tid(req), req.params.planId, req.body));
-export const deletePlan = async (req, res) => {
-  await feesService.deletePlan(tid(req), req.params.planId);
-  res.status(204).end();
-};
-export const assignPlan = async (req, res) => res.json(await feesService.assignPlan(tid(req), req.params.planId, req.body));
+export const deletePlan = async (req, res) => res.json(await feesService.deletePlan(tid(req), req.params.planId));
+export const assignPlan = async (req, res) => res.json(await feesService.assignPlan(tid(req), req.params.planId, req.body, req.user));
 
 export const register = async (req, res) => res.json(await feesService.feeRegister(tid(req), req.validatedQuery));
 export const ledger = async (req, res) =>

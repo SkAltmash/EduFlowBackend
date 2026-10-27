@@ -1,9 +1,11 @@
 import mongoose from "mongoose";
 import Attendance, { ATTENDANCE_STATUSES } from "../../models/Attendance.js";
 import Student from "../../models/Student.js";
+import StudentLeave from "../../models/StudentLeave.js";
 import { ROLES } from "../../models/Membership.js";
 import AppError from "../../utils/AppError.js";
 import { loadClassList } from "../academics/class-names.js";
+import { assertTeachesClass, teacherScope } from "../teaching/teaching.scope.js";
 
 // Natural ordering: "Grade 2" < "Grade 10", roll "9" < "10"
 const COLLATION = { locale: "en", numericOrdering: true };
@@ -125,11 +127,15 @@ export async function getRegister(tenantId, role, { date, grade, section }) {
     ? await Student.find({ tenantId, _id: { $in: missingIds } }).lean()
     : [];
 
+  // Leave recorded in advance: the register suggests "Leave" for these students
+  const leaves = await StudentLeave.find({ tenantId, studentId: { $in: students.map((s) => s._id) }, from: { $lte: date }, to: { $gte: date } }, { studentId: 1, reason: 1, from: 1, to: 1 }).lean();
+  const leaveBy = new Map(leaves.map((l) => [String(l.studentId), { reason: l.reason || "", from: l.from, to: l.to }]));
+
   const rows = sortByRoll(
     [...students.map((s) => ({ ...serializeStudentRow(s), current: true })), ...former.map((s) => ({ ...serializeStudentRow(s), current: false }))]
   ).map((row) => {
     const r = recordByStudent.get(row.id);
-    return { ...row, attendance: r ? { status: r.status, note: r.note || "" } : null };
+    return { ...row, attendance: r ? { status: r.status, note: r.note || "" } : null, leave: leaveBy.get(row.id) ?? null };
   });
 
   const counts = emptyCounts();
@@ -152,6 +158,7 @@ export async function getRegister(tenantId, role, { date, grade, section }) {
 export async function saveRegister(tenantId, user, { date, grade, section, entries }) {
   const permission = editPermission(user.role, date);
   if (!permission.canEdit) throw AppError.forbidden(permission.reason, "ATTENDANCE_LOCKED");
+  assertTeachesClass(await teacherScope(user), grade, section, "mark attendance for");
 
   const ids = entries.map((e) => e.studentId);
   const [students, existing] = await Promise.all([

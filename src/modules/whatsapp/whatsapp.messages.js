@@ -33,6 +33,18 @@ export const TEMPLATES = {
     body: "Dear {{1}}, performance report of {{2}} ({{3}}) for {{4}}: {{5}}. Average marks {{6}}, attendance {{7}}. {{8}} Regards, {{9}}.",
     example: ["Mr. Sharma", "Aarav Sharma", "Class 5 - A", "1 Oct to 26 Oct 2026", "rank 3rd of 30 in class, 5th of 120 in school", "86.3% (grade A2, 3 tests)", "100% (22 of 22 days)", "Best: Unit Test 1 at 92%.", "Sunrise Public School"],
   },
+  homework: {
+    title: "Homework",
+    suggestedName: "homework",
+    body: "Dear {{1}}, homework for {{2}} ({{3}}) in {{4}}: {{5}}. {{6}} Due: {{7}}. Regards, {{8}}.",
+    example: ["Mr. Sharma", "Aarav Sharma", "Class 5 - A", "Mathematics", "Exercise 4.2, questions 1 to 10", "Show all working in the notebook.", "28 Oct 2026", "Sunrise Public School"],
+  },
+  notice: {
+    title: "Notice to parents",
+    suggestedName: "school_notice",
+    body: "Dear {{1}}, a notice from {{2}}: {{3}}. {{4}}",
+    example: ["Mr. Sharma", "Sunrise Public School", "Parent-teacher meeting on Saturday", "PTM for classes 1 to 5 on 31 Oct, 9 am to 12 pm. Please bring the report card."],
+  },
   fee_receipt: {
     title: "Fee receipt",
     suggestedName: "fee_receipt",
@@ -272,4 +284,17 @@ export function performanceReport({ school, guardianName, row, period, classSize
     text: lines.join("\n"),
     params: [guardianName || "Parent", row.fullName, cls ? `Class ${cls}` : "-", period, rank, marks, att, notes.join(" ") || "Keep it up!", school],
   };
+}
+
+export function homeworkMessage({ school, guardianName, studentName, className, hw }) {
+  const due = hw.dueDate ? formatDay(hw.dueDate) : "next class";
+  const lines = [greeting(guardianName), "", `📚 Homework for *${studentName}*${className ? ` (Class ${className})` : ""}`, `*${hw.subject}:* ${hw.title}`];
+  if (hw.details) lines.push("", hw.details);
+  lines.push("", `🗓️ *Due:* ${due}`, "", "Regards,", school);
+  return { text: lines.join("\n"), params: [guardianName || "Parent", studentName, className ? `Class ${className}` : "-", hw.subject, hw.title, hw.details || "-", due, school] };
+}
+
+export function noticeMessage({ school, guardianName, notice }) {
+  const lines = [greeting(guardianName), "", `📢 *${notice.title}*`, "", notice.body, "", "Regards,", school];
+  return { text: lines.join("\n"), params: [guardianName || "Parent", school, notice.title, notice.body] };
 }

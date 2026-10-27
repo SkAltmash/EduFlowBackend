@@ -14,6 +14,8 @@ const refSchemas = {
   exam_result: z.object({ examId: objectId, studentId: objectId }),
   progress_report: z.object({ studentId: objectId, month }),
   // The leaderboard the rank comes from: a period, optionally one class
+  homework: z.object({ homeworkId: objectId, studentId: objectId }),
+  notice: z.object({ noticeId: objectId, studentId: objectId }),
   performance_report: z.object({
     studentId: objectId,
     from: day,

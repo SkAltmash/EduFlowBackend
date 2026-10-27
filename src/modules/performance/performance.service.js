@@ -46,9 +46,21 @@ async function measure(tenantId, studentIds, { from, to, grade, section }, gradi
 
   const examById = new Map(exams.map((e) => [String(e._id), e]));
   const marks = new Map();
+  // Subject name (case-insensitive) → percents and who is below the pass mark
+  const subjects = new Map();
   for (const r of results) {
     const exam = examById.get(String(r.examId));
     const res = computeResult(exam.subjects, marksMap(r), grading);
+    res.subjects.forEach((sr, i) => {
+      if (sr.percent === null) return;
+      const name = exam.subjects[i].name.trim();
+      const key = name.toLowerCase();
+      const g = subjects.get(key) ?? { name, percents: [], below: new Set(), exams: new Set() };
+      g.percents.push(sr.percent);
+      g.exams.add(String(exam._id));
+      if (sr.passed === false) g.below.add(String(r.studentId));
+      subjects.set(key, g);
+    });
     if (res.percent === null) continue;
     const m = marks.get(String(r.studentId)) ?? { percents: [], passed: 0, failed: 0, best: null };
     m.percents.push(res.percent);
@@ -79,7 +91,10 @@ async function measure(tenantId, studentIds, { from, to, grade, section }, gradi
       score: score(average, rate),
     });
   }
-  return { measures: out, tests: exams.length };
+  const subjectSummary = [...subjects.values()]
+    .map((g) => ({ name: g.name, average: round1(g.percents.reduce((a, b) => a + b, 0) / g.percents.length), entries: g.percents.length, tests: g.exams.size, below: [...g.below] }))
+    .sort((a, b) => a.average - b.average);
+  return { measures: out, tests: exams.length, subjects: subjectSummary };
 }
 
 /** Competition ranking (1, 1, 3) by a value, highest first; nulls unranked. */
@@ -174,6 +189,8 @@ export async function leaderboard(tenantId, { from, to, grade, section }) {
       attendance: avg(rows.map((r) => r.attendance.rate)),
       perfectAttendance: rows.filter((r) => r.attendance.rate === 100 && r.attendance.days >= 5).length,
     },
+    // Weakest subject first
+    subjects: now.subjects,
     students: rows.sort((a, b) => (a.rank.overall ?? Infinity) - (b.rank.overall ?? Infinity) || a.fullName.localeCompare(b.fullName)),
     classes,
     generatedAt: new Date().toISOString(),

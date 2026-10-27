@@ -2,6 +2,7 @@ import Membership, { ROLES } from "../../models/Membership.js";
 import SchoolSettings from "../../models/SchoolSettings.js";
 import Session from "../../models/Session.js";
 import Tenant from "../../models/Tenant.js";
+import TeachingAssignment from "../../models/TeachingAssignment.js";
 import User from "../../models/User.js";
 import AuditLog from "../../models/AuditLog.js";
 import AppError from "../../utils/AppError.js";
@@ -154,6 +155,7 @@ export async function removeMember(actor, ctx, userId) {
   if (membership.role === ROLES.OWNER) await assertNotLastOwner(actor.tenantId, userId);
 
   await membership.deleteOne();
+  await TeachingAssignment.deleteMany({ tenantId: actor.tenantId, userId });
   await revokeSessions(userId, actor.tenantId);
   await audit(actor, ctx, { action: "membership.delete", targetType: "membership", targetId: membership.userId, metadata: { role: membership.role } });
   return listMembers(actor.tenantId);

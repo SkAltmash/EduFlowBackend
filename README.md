@@ -43,6 +43,8 @@ src/
 │   ├── school/    school profile and team (staff accounts and roles)
 │   ├── academics/ class list (sections, subjects), academic years, year-end promotion
 │   ├── performance/ leaderboards from test marks and attendance
+│   ├── teaching/  class teacher and subject teacher assignments ("my classes")
+│   ├── classroom/ homework, leave, staff notes, notices, timetable, syllabus, correction requests
 │   └── tenant/    example protected routes
 ├── utils/         jwt, password, cookies, crypto, AppError
 ├── app.js
@@ -423,6 +425,42 @@ previous period of the same length. `classes` has class averages and toppers.
 Parents can get each child's result on WhatsApp with the `performance_report` message type
 (refs `{ studentId, from, to, grade?, section? }`; owner/admin/teacher): class rank, school
 rank (when not filtered to a class), average marks, attendance and a note (best test, change).
+
+## Teaching assignments ([src/modules/teaching](src/modules/teaching))
+
+| Method | Path | Body | Notes |
+| --- | --- | --- | --- |
+| GET | `/api/teaching/me` | | `{ limited, classes: [{ grade, section, classTeacher, subjects }] }` |
+| GET | `/api/teaching/assignments` | | every member's classes, plus `classTeachers` |
+| PUT | `/api/teaching/assignments/:userId` | `{ assignments: [{ grade, section?, subject? }] }` | owner/admin; replaces the set; `subject: ""` = class teacher |
+
+A teacher **with no assignments keeps school-wide access** (schools that haven't set this up
+keep working). Once assigned (`limited`):
+
+- Attendance: can mark only assigned classes (`403 NOT_YOUR_CLASS`); other registers are read-only.
+- Tests: can create tests only for assigned classes; a **subject teacher** enters marks only for
+  their subjects (other subjects keep their saved marks whatever is sent) and can't write
+  remarks; the class teacher or the test's creator can edit the test. `GET /api/exams/:id`
+  returns `access: { subjects, all, canEditTest }`; `GET /api/exams?mine=1` lists their classes.
+- Dashboard ("My day"), homework, leave, notices and syllabus follow the same rules.
+- Renaming a class updates assignments; removing a member deletes theirs.
+
+## Classroom ([src/modules/classroom](src/modules/classroom))
+
+Owners, admins and teachers unless noted.
+
+| Area | Endpoints | Notes |
+| --- | --- | --- |
+| Homework | `GET/POST /api/homework` (`?from&to&grade&section&mine=1`), `GET/PATCH/DELETE /api/homework/:id` | GET one includes the class's students (for WhatsApp); author or admin edits |
+| Leave | `GET /api/leaves?from&to&studentId`, `POST /api/leaves` `{ studentId, from, to, reason }`, `DELETE /api/leaves/:id` | the register returns `leave` per student and the app suggests "Leave" |
+| Notes | `GET /api/notes?studentId`, `POST /api/notes` `{ studentId, kind: note\|praise\|concern\|meeting, text }`, `DELETE /api/notes/:id` | staff only, never sent to parents |
+| Corrections | `GET /api/corrections?status`, `POST /api/corrections` `{ studentId, message }`, `PATCH /api/corrections/:id` `{ status }` | teachers report wrong details; owners/admins resolve |
+| Notices | `GET/POST /api/notices`, `POST /api/notices/read-all`, `GET/DELETE /api/notices/:id`, `POST /api/notices/:id/read` | `audience: staff\|parents`; every member reads; teachers send parent notices only to their classes; `unread` counts staff notices |
+| Timetable | `GET /api/timetable?grade&section` or `?mine=1`, `PUT /api/timetable` `{ grade, section, slots: [{ day 1-7, start, end, subject, teacherId? }] }` | PUT is owner/admin; overlapping periods → `400 OVERLAP` |
+| Syllabus | `GET /api/syllabus?grade&subject`, `POST /api/syllabus` `{ grade, subject, titles[] }`, `PATCH /api/syllabus/:id` `{ title?, done?: { section, value } }`, `DELETE` | progress per section |
+
+New WhatsApp message types: `homework` (refs `{ homeworkId, studentId }`) and `notice`
+(refs `{ noticeId, studentId }`); Settings → WhatsApp lists their templates.
 
 ## Super admin (platform administration)
 

@@ -8,6 +8,7 @@ import Promotion from "../../models/Promotion.js";
 import SchoolClass from "../../models/SchoolClass.js";
 import SchoolSettings from "../../models/SchoolSettings.js";
 import Student from "../../models/Student.js";
+import TeachingAssignment from "../../models/TeachingAssignment.js";
 import User from "../../models/User.js";
 import AppError from "../../utils/AppError.js";
 import { classKey, naturalCompare } from "./class-names.js";
@@ -19,7 +20,7 @@ const addDays = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * DAY_MS
 const utcToday = () => new Date().toISOString().slice(0, 10);
 
 /** Records that store a class name; FeePlan has a class but no section. */
-const CLASS_COLLECTIONS = [Student, Attendance, Exam, Invoice];
+const CLASS_COLLECTIONS = [Student, Attendance, Exam, Invoice, TeachingAssignment];
 
 function serializeClass(c, counts) {
   return {

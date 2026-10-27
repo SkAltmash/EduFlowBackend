@@ -69,6 +69,8 @@ export const listExamsQuery = z.object({
   section: z.string().trim().max(20).optional(),
   month: month.optional(),
   search: z.string().trim().max(100).optional(),
+  // Only tests of classes the signed-in teacher is assigned to
+  mine: z.enum(["1", "0"]).optional(),
 });
 
 export const studentReportQuery = z.object({ month });

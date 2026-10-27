@@ -7,6 +7,7 @@ import Attendance from "../../models/Attendance.js";
 import Tenant from "../../models/Tenant.js";
 import AppError from "../../utils/AppError.js";
 import { loadClassList } from "../academics/class-names.js";
+import { assertTeachesClass, canMarkSubject, classFilter, markableSubjects, teacherScope } from "../teaching/teaching.scope.js";
 import { DEFAULT_GRADING, SCALES, assignRanks, classStats, computeResult, letterGrade } from "./exams.grading.js";
 
 const COLLATION = { locale: "en", numericOrdering: true };
@@ -107,8 +108,13 @@ async function buildExamView(tenantId, exam, grading) {
 // Exams
 // ---------------------------------------------------------------------------
 
-export async function listExams(tenantId, { page, limit, grade, section, month, search }) {
+export async function listExams(tenantId, { page, limit, grade, section, month, search, mine }, user) {
   const filter = { tenantId };
+  if (mine === "1" && user) {
+    const scoped = classFilter(await teacherScope(user));
+    // A class-wide test ("" section) belongs to every section's teacher
+    if (scoped) filter.$or = scoped.$or.map((c) => (c.section ? { grade: c.grade, section: { $in: ["", c.section] } } : { grade: c.grade }));
+  }
   if (grade) filter.grade = grade;
   if (section) filter.section = section;
   if (month) filter.date = { $gte: `${month}-01`, $lte: `${month}-31` };
@@ -155,22 +161,41 @@ async function canonicalClass(tenantId, grade, section) {
   return { grade: r.grade, section: r.section };
 }
 
-export async function createExam(tenantId, userId, input) {
+export async function createExam(tenantId, user, input) {
+  const userId = user.id;
   const data = { ...input, ...(await canonicalClass(tenantId, input.grade, input.section)) };
+  assertTeachesClass(await teacherScope(user), data.grade, data.section, "create tests for");
   const exam = await Exam.create({ ...data, subjects: data.subjects.map(({ _id, ...s }) => s), tenantId, createdBy: userId });
-  return getExam(tenantId, exam._id);
+  return getExam(tenantId, exam._id, user);
 }
 
-export async function getExam(tenantId, id) {
-  const [exam, grading] = await Promise.all([findExamOrThrow(tenantId, id), getGrading(tenantId)]);
+export async function getExam(tenantId, id, user) {
+  const [exam, grading, scope] = await Promise.all([findExamOrThrow(tenantId, id), getGrading(tenantId), user ? teacherScope(user) : { limited: false, assignments: [] }]);
   const { rows, stats } = await buildExamView(tenantId, exam, grading);
-  return { exam: serializeExam(exam), grading, students: rows, stats };
+  // Which subjects this member may enter marks for (all for admins and class teachers)
+  const allowed = markableSubjects(scope, exam.grade, exam.section);
+  const editable = exam.subjects.filter((s) => canMarkSubject(allowed, s.name)).map((s) => String(s._id));
+  return {
+    exam: serializeExam(exam),
+    grading,
+    students: rows,
+    stats,
+    access: { subjects: editable, all: editable.length === exam.subjects.length, canEditTest: allowed === null || (user && String(exam.createdBy) === String(user.id)) },
+  };
 }
 
 /** Subjects that already have marks can be renamed or re-weighted, but not removed. */
-export async function updateExam(tenantId, id, data) {
+export async function updateExam(tenantId, id, data, user) {
   const exam = await Exam.findOne({ _id: id, tenantId });
   if (!exam) throw AppError.notFound("Test not found");
+  if (user) {
+    const scope = await teacherScope(user);
+    // Changing the test itself is for whoever created it, the class teacher or an admin
+    if (markableSubjects(scope, exam.grade, exam.section) !== null && String(exam.createdBy) !== String(user.id)) {
+      throw AppError.forbidden("Only the class teacher, its creator or an admin can change this test", "NOT_YOUR_CLASS");
+    }
+    if (data.grade !== undefined || data.section !== undefined) assertTeachesClass(scope, data.grade ?? exam.grade, data.section ?? exam.section, "move a test to");
+  }
   if (data.grade !== undefined || data.section !== undefined) {
     Object.assign(data, await canonicalClass(tenantId, data.grade ?? exam.grade, data.section ?? exam.section));
   }
@@ -195,7 +220,7 @@ export async function updateExam(tenantId, id, data) {
 
   Object.assign(exam, data);
   await exam.save();
-  return getExam(tenantId, exam._id);
+  return getExam(tenantId, exam._id, user);
 }
 
 export async function deleteExam(tenantId, id) {
@@ -204,9 +229,14 @@ export async function deleteExam(tenantId, id) {
   await Exam.deleteOne({ _id: exam._id, tenantId });
 }
 
-export async function saveMarks(tenantId, userId, id, { entries }) {
+export async function saveMarks(tenantId, user, id, { entries }) {
+  const userId = user.id;
   const exam = await findExamOrThrow(tenantId, id);
   const subjectById = new Map(exam.subjects.map((s) => [String(s._id), s]));
+  const scope = await teacherScope(user);
+  assertTeachesClass(scope, exam.grade, exam.section, "enter marks for");
+  const allowed = markableSubjects(scope, exam.grade, exam.section);
+  const mayEdit = (subjectId) => canMarkSubject(allowed, subjectById.get(subjectId)?.name);
 
   for (const e of entries) {
     for (const m of e.marks) {
@@ -224,10 +254,35 @@ export async function saveMarks(tenantId, userId, id, { entries }) {
     Student.find({ ...rosterFilter(tenantId, exam), _id: { $in: ids } }, { _id: 1 }).lean(),
     ExamResult.find({ tenantId, examId: exam._id, studentId: { $in: ids } }, { studentId: 1 }).lean(),
   ]);
-  const allowed = new Set([...eligible.map((s) => String(s._id)), ...existing.map((r) => String(r.studentId))]);
-  const outside = ids.filter((sid) => !allowed.has(sid));
+  const inRoster = new Set([...eligible.map((s) => String(s._id)), ...existing.map((r) => String(r.studentId))]);
+  const outside = ids.filter((sid) => !inRoster.has(sid));
   if (outside.length) {
     throw AppError.badRequest(`${outside.length} student(s) are not in this class. Refresh and try again.`, "STUDENT_NOT_IN_CLASS");
+  }
+
+  // Subject teachers: other subjects keep their saved marks whatever was sent
+  const savedBy = new Map();
+  if (allowed !== null) {
+    const saved = await ExamResult.find({ tenantId, examId: exam._id, studentId: { $in: ids } }, { studentId: 1, marks: 1 }).lean();
+    for (const r of saved) savedBy.set(String(r.studentId), new Map(r.marks.map((m) => [String(m.subjectId), m])));
+  }
+  const finalMarks = (e) => {
+    const sent = new Map(e.marks.map((m) => [m.subjectId, m]));
+    const saved = savedBy.get(e.studentId) ?? new Map();
+    return exam.subjects
+      .map((s) => {
+        const sid = String(s._id);
+        if (mayEdit(sid)) {
+          const m = sent.get(sid);
+          return m ? { subjectId: oid(sid), absent: m.absent, marks: m.absent ? null : m.marks } : saved.get(sid);
+        }
+        return saved.get(sid);
+      })
+      .filter(Boolean);
+  };
+  if (allowed !== null && entries.some((e) => e.remarks !== undefined)) {
+    // Remarks on the report card are the class teacher's
+    for (const e of entries) delete e.remarks;
   }
 
   await ExamResult.bulkWrite(
@@ -237,7 +292,7 @@ export async function saveMarks(tenantId, userId, id, { entries }) {
         update: {
           $set: {
             // Absent wins over a number, and clears it
-            marks: e.marks.map((m) => ({ subjectId: oid(m.subjectId), absent: m.absent, marks: m.absent ? null : m.marks })),
+            marks: allowed === null ? e.marks.map((m) => ({ subjectId: oid(m.subjectId), absent: m.absent, marks: m.absent ? null : m.marks })) : finalMarks(e),
             updatedBy: oid(userId),
             ...(e.remarks !== undefined ? { remarks: e.remarks } : {}),
           },
@@ -249,7 +304,7 @@ export async function saveMarks(tenantId, userId, id, { entries }) {
     { ordered: false }
   );
 
-  return getExam(tenantId, exam._id);
+  return getExam(tenantId, exam._id, user);
 }
 
 // ---------------------------------------------------------------------------

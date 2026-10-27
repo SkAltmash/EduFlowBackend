@@ -9,6 +9,8 @@ import User from "../../models/User.js";
 import Payment from "../../models/Payment.js";
 import Invoice from "../../models/Invoice.js";
 import Attendance from "../../models/Attendance.js";
+import Homework from "../../models/Homework.js";
+import Notice from "../../models/Notice.js";
 import AppError from "../../utils/AppError.js";
 import { canEncrypt, decrypt, encrypt } from "../../utils/crypto.js";
 import * as messages from "./whatsapp.messages.js";
@@ -162,6 +164,8 @@ export async function testSend(tenantId, { to }) {
  *   exam_result        { examId, studentId }
  *   progress_report    { studentId, month }
  *   performance_report { studentId, from, to, grade?, section? }
+ *   homework           { homeworkId, studentId }
+ *   notice             { noticeId, studentId }
  * Returns one entry per ref: { refKey, studentId, studentName, guardianName, to, text, params, skip? }.
  */
 async function buildRecipients(tenantId, type, refs, { countryCode, today = utcToday() }) {
@@ -319,6 +323,35 @@ async function buildRecipients(tenantId, type, refs, { countryCode, today = utcT
         const anyTest = report?.tests.some((t) => t.result.status !== "pending");
         if (!report || (!anyTest && report.attendance.days === 0)) return { skip: "Nothing to report this month" };
         return messages.progressReport({ school, guardianName: base.guardianName, report });
+      })
+    );
+  }
+
+  if (type === "homework") {
+    const list = await Homework.find({ tenantId, _id: { $in: [...new Set(refs.map((r) => r.homeworkId))] } }).lean();
+    const byId = new Map(list.map((h) => [String(h._id), h]));
+    return refs.map((ref) =>
+      withStudent(ref, `hw:${ref.homeworkId}:${ref.studentId}`, (s, base) => {
+        const hw = byId.get(ref.homeworkId);
+        if (!hw) return { skip: "Homework not found" };
+        if (s.grade !== hw.grade || (hw.section && (s.section || "") !== hw.section)) return { skip: "Not in this class" };
+        const cls = s.section ? `${s.grade} - ${s.section}` : s.grade;
+        return messages.homeworkMessage({ school, guardianName: base.guardianName, studentName: base.studentName, className: cls, hw });
+      })
+    );
+  }
+
+  if (type === "notice") {
+    const list = await Notice.find({ tenantId, _id: { $in: [...new Set(refs.map((r) => r.noticeId))] } }).lean();
+    const byId = new Map(list.map((n) => [String(n._id), n]));
+    return refs.map((ref) =>
+      withStudent(ref, `notice:${ref.noticeId}:${ref.studentId}`, (s, base) => {
+        const n = byId.get(ref.noticeId);
+        if (!n) return { skip: "Notice not found" };
+        if (n.audience !== "parents") return { skip: "This notice is for staff" };
+        const inClass = !n.classes?.length || n.classes.some((c) => c.grade === s.grade && (!c.section || c.section === (s.section || "")));
+        if (!inClass) return { skip: "Not in this notice's classes" };
+        return messages.noticeMessage({ school, guardianName: base.guardianName, notice: n });
       })
     );
   }

@@ -21,6 +21,14 @@ import "../src/models/SchoolSettings.js";
 import "../src/models/SchoolClass.js";
 import "../src/models/AcademicYear.js";
 import "../src/models/Promotion.js";
+import "../src/models/TeachingAssignment.js";
+import "../src/models/SyllabusTopic.js";
+import "../src/models/TimetableSlot.js";
+import "../src/models/Notice.js";
+import "../src/models/CorrectionRequest.js";
+import "../src/models/StudentNote.js";
+import "../src/models/StudentLeave.js";
+import "../src/models/Homework.js";
 
 await connectDB();
 for (const model of Object.values(mongoose.models)) {

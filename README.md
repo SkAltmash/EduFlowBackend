@@ -270,6 +270,26 @@ integers in paise** (₹1 = 100), so totals never have rounding errors.
 | GET | `/api/fees/payments/:paymentId` | | receipt: payment, school name, current balance |
 | POST | `/api/fees/payments/:paymentId/void` | `{ reason }` | owner/admin only |
 
+### Advance & fees paid before EduFlow ([fees.advance.js](src/modules/fees/fees.advance.js))
+
+A payment doesn't have to be fully on dues: the part not covered by its `allocations` is the student's **advance**.
+
+- **Collecting:** paying more than the selected dues (or paying when there are none) keeps the extra as advance. `allocations` may add up to less than `amount`.
+- **Paid before EduFlow:** `kind: "opening"` on `POST /api/fees/payments` records fees paid before the school used EduFlow.
+  - Receipt numbers are `OB00001…`, separate from `R…`.
+  - It is listed with payments but left out of collection totals (dashboard, summary, payment totals, console revenue).
+- **New students:** `POST /api/students` accepts `feesPaid: { amount, date, mode, reference, note, kind }` (default `opening`).
+  - Import columns: **Fees paid** (rupees), **Fees paid date**, **Payment mode**, **Fees note**.
+  - Imported fees are recorded only for students the import creates, so re-importing never doubles them.
+- **Settling:** `settleStudent()` first moves money off dues that are now paid more than they cost (back to advance), then applies advance to unpaid dues, oldest due and oldest payment first. It runs after:
+  - assigning a plan (the response has `advanceApplied`, `advanceStudents`);
+  - editing a plan;
+  - setting a concession (a part-paid due gets the full concession; fully paid dues keep their history);
+  - editing a due's discount;
+  - voiding a payment;
+  - removing a plan from a student or deleting a due (money paid on them becomes advance).
+- The ledger has `totals.advance`. Each payment has `kind` and `advance`, and a receipt has `currentAdvance`. The register and the assign preview show each student's `advance`.
+
 ### Concessions ([fees.concessions.js](src/modules/fees/fees.concessions.js))
 
 Owners, admins and accountants. A **standing concession on the student** is applied to their
@@ -395,6 +415,19 @@ demoted or removed (`LAST_OWNER`). Team changes are written to the audit log.
 Own account (any signed-in member): `PATCH /api/auth/me` `{ name }`, and
 `POST /api/auth/change-password` `{ currentPassword, newPassword }`, which signs out every
 other session and keeps the current one (rate limited like login).
+
+### School logo (Cloudinary)
+
+Needs the Cloudinary keys in the console (Settings) and `DATA_ENCRYPTION_KEY`. The browser uploads straight to Cloudinary, so the API secret stays on the server.
+
+1. `POST /api/school/logo/signature` (owner/admin) returns `{ uploadUrl, fields }`.
+   - The fields are a signed upload to this school's own slot `<folder>/schools/<tenantId>/logo`.
+   - The upload overwrites the previous logo, takes PNG/JPG/WebP only, and is scaled to at most 600 px.
+2. The browser posts the file with those fields to `uploadUrl`, then sends `PUT /api/school/logo { url }`.
+   - The URL must be that slot on our Cloudinary account; anything else is refused.
+3. `DELETE /api/school/logo` removes it (and deletes the image on Cloudinary).
+
+`GET /api/school` returns `logoUrl` and `logoUploads` (whether uploads are switched on). The logo heads receipts and report cards.
 
 ## Classes, years & promotion ([src/modules/academics](src/modules/academics))
 
@@ -560,7 +593,8 @@ Each school has a `subscription` (`status: trial | active | suspended`, `planId`
 | GET | `/api/admin/schools/:id/export` | | all of the school's data as JSON (DPDP access request) |
 | DELETE | `/api/admin/schools/:id` | `{ confirm: "<slug>" }` | deletes the school, all its data and accounts that belonged only to it |
 | GET / POST / PATCH | `/api/admin/plans[/:planId]` | plan | only one default plan |
-| GET / PUT | `/api/admin/settings` | `{ supportWhatsapp, supportEmail }` | support contact shown on schools' renew links |
+| GET / PUT | `/api/admin/settings` | `{ supportWhatsapp?, supportEmail?, cloudinary?: { cloudName, apiKey, apiSecret, folder } }` | support contact; Cloudinary keys (checked with Cloudinary's ping before saving; the secret is stored encrypted and never returned, empty = keep) |
+| POST | `/api/admin/settings/cloudinary/test` | | checks the saved Cloudinary keys |
 | GET | `/api/admin/super-admins` | | |
 | POST | `/api/admin/super-admins` | `{ email, name?, password? }` | promotes an existing account, or creates one (name and password required) |
 | PATCH | `/api/admin/super-admins/:userId` | `{ name?, email? }` | any super admin, including yourself |

@@ -60,10 +60,19 @@ const listQuery = z.object({
   status: z.enum(["all", "none", "trial", "active", "paying", "overdue", "expired", "suspended"]).default("all"),
   health: z.enum(["all", "active", "quiet", "never", "new"]).default("all"),
 });
-const settingsSchema = z.object({
-  supportWhatsapp: z.string().trim().transform((v) => v.replace(/\D/g, "")).pipe(z.union([z.literal(""), z.string().min(10, "Enter the number with country code, e.g. 919876543210").max(15)])),
-  supportEmail: z.union([z.literal(""), email]),
-});
+const settingsSchema = z
+  .object({
+    supportWhatsapp: z.string().trim().transform((v) => v.replace(/\D/g, "")).pipe(z.union([z.literal(""), z.string().min(10, "Enter the number with country code, e.g. 919876543210").max(15)])),
+    supportEmail: z.union([z.literal(""), email]),
+    cloudinary: z.object({
+      cloudName: z.string().trim().max(100).regex(/^[a-z0-9_-]*$/i, "Cloud name has only letters, digits, - and _"),
+      apiKey: z.string().trim().max(100).regex(/^\d*$/, "The API key is a number"),
+      // Empty = keep the saved secret
+      apiSecret: z.string().trim().max(200).default(""),
+      folder: z.string().trim().max(100).regex(/^[a-z0-9_/-]*$/i, "Folder: letters, digits, - _ and /").default("eduflow"),
+    }),
+  })
+  .partial();
 const superAdminSchema = z.object({ email, name: z.string().trim().min(2).max(100).optional(), password: strongPassword.optional() });
 const codeSchema = z.object({ code: z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code") });
 
@@ -107,7 +116,8 @@ r.post("/announcements", validateBody(announcementSchema), async (req, res) => r
 r.patch("/announcements/:announcementId", validateBody(announcementSchema.partial()), async (req, res) => res.json(await platform.saveAnnouncement(ctx(req), req.params.announcementId, req.body)));
 r.delete("/announcements/:announcementId", async (req, res) => res.json(await platform.deleteAnnouncement(ctx(req), req.params.announcementId)));
 
-r.get("/settings", async (req, res) => res.json(await platform.getSettings()));
+r.get("/settings", async (req, res) => res.json(await platform.getAdminSettings()));
+r.post("/settings/cloudinary/test", async (req, res) => res.json(await platform.testCloudinary()));
 r.put("/settings", validateBody(settingsSchema), async (req, res) => res.json(await platform.saveSettings(ctx(req), req.body)));
 
 r.get("/super-admins", async (req, res) => res.json(await platform.listSuperAdmins(ctx(req))));

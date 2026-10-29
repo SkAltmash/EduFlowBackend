@@ -2,7 +2,8 @@ import mongoose from "mongoose";
 
 export const PAYMENT_MODES = Object.freeze(["cash", "upi", "card", "bank", "cheque", "other"]);
 
-// Money received from a student, split across one or more dues (allocations).
+// Money received from a student, split across one or more dues (allocations). Any part
+// not on a due is the student's advance, applied when new dues appear (fees.advance.js).
 // Student details are copied so receipts and searches never need a join and survive edits.
 const paymentSchema = new mongoose.Schema(
   {
@@ -18,6 +19,9 @@ const paymentSchema = new mongoose.Schema(
     },
     date: { type: String, required: true, match: /^\d{4}-\d{2}-\d{2}$/ },
     amount: { type: Number, required: true, min: 1 },
+    // "receipt": collected in EduFlow. "opening": paid before the school used EduFlow
+    // (already has a paper receipt), so it doesn't count in collections for its date.
+    kind: { type: String, enum: ["receipt", "opening"], default: "receipt" },
     mode: { type: String, enum: PAYMENT_MODES, required: true },
     // UTR / transaction id / cheque number
     reference: { type: String, trim: true, maxlength: 100, default: "" },

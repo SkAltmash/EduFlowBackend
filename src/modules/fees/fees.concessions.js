@@ -9,6 +9,7 @@ import Student from "../../models/Student.js";
 import User from "../../models/User.js";
 import AppError from "../../utils/AppError.js";
 import { validateBody, validateQuery } from "../../middleware/validate.js";
+import { advances, settleStudent } from "./fees.advance.js";
 import { objectId } from "../auth/auth.validation.js";
 
 export const CONCESSION_TYPES = ["percent", "amount", "fixed", "free"];
@@ -71,7 +72,9 @@ async function syncDues(tenantId, studentId, concession, session) {
     if (d.discountSource === "manual") continue;
     // Settled dues keep their history
     if (d.amount - d.discount - d.paid <= 0) continue;
-    const target = Math.min(discountFor(d.amount, concession), d.amount - d.paid);
+    // A part-paid due gets the full concession; if that's less than what was paid,
+    // the extra becomes advance (settleStudent below)
+    const target = discountFor(d.amount, concession);
     if (target === d.discount) continue;
     d.discount = target;
     d.discountReason = target ? concessionLabel(concession) : "";
@@ -96,6 +99,7 @@ export async function setStudentConcession(tenantId, user, studentId, concession
     }
     await student.save({ session });
     updated = await syncDues(tenantId, student._id, concession, session);
+    await settleStudent(tenantId, student._id, session);
   });
   return { concession: serializeConcession(student.feeConcession), duesUpdated: updated };
 }
@@ -108,7 +112,11 @@ export async function assignPreview(tenantId, planId, { grade, section }) {
     .collation({ locale: "en", numericOrdering: true })
     .sort({ section: 1, rollNo: 1, firstName: 1 })
     .lean();
-  const assigned = new Set((await Invoice.distinct("studentId", { tenantId, planId: plan._id, studentId: { $in: students.map((s) => s._id) } })).map(String));
+  const [assignedIds, advanceOf] = await Promise.all([
+    Invoice.distinct("studentId", { tenantId, planId: plan._id, studentId: { $in: students.map((s) => s._id) } }),
+    advances(tenantId, students.map((s) => s._id)),
+  ]);
+  const assigned = new Set(assignedIds.map(String));
   return {
     installments: plan.installments.map((i) => ({ label: i.label, dueDate: i.dueDate, amount: i.items.reduce((t, it) => t + it.amount, 0) })),
     students: students.map((s) => ({
@@ -119,6 +127,8 @@ export async function assignPreview(tenantId, planId, { grade, section }) {
       section: s.section || "",
       concession: serializeConcession(s.feeConcession),
       assigned: assigned.has(String(s._id)),
+      // Already paid; pays this plan's first installments when assigned
+      advance: advanceOf.get(String(s._id)) ?? 0,
     })),
   };
 }

@@ -1,7 +1,11 @@
 import mongoose from "mongoose";
 import Student from "../../models/Student.js";
 import AppError from "../../utils/AppError.js";
-import { createStudentSchema } from "./students.validation.js";
+import Counter from "../../models/Counter.js";
+import Payment from "../../models/Payment.js";
+import User from "../../models/User.js";
+import { createStudentSchema, importFeesSchema } from "./students.validation.js";
+import { createPayment } from "../fees/fees.service.js";
 import { loadClassList } from "../academics/class-names.js";
 import { assertStudentCapacity } from "../platform/subscription.js";
 
@@ -182,16 +186,22 @@ export async function getStudent(tenantId, id) {
 // Mutations
 // ---------------------------------------------------------------------------
 
-export async function createStudent(tenantId, userId, input) {
+/**
+ * Adds a student. `feesPaid` records fees they've already paid: it's kept as advance and
+ * pays off their dues as soon as a fee plan is assigned.
+ */
+export async function createStudent(tenantId, userId, { feesPaid, ...input }) {
   const data = applyClass(await loadClassList(tenantId), input);
   if ((data.status ?? "active") === "active") await assertStudentCapacity(tenantId, 1);
+  let student;
   try {
-    const student = await Student.create({ ...compact(data), tenantId, createdBy: userId, updatedBy: userId });
-    return { student: serializeStudent(student) };
+    student = await Student.create({ ...compact(data), tenantId, createdBy: userId, updatedBy: userId });
   } catch (err) {
     if (isDuplicateKey(err)) throw ADMISSION_NO_TAKEN(data.admissionNo);
     throw err;
   }
+  const payment = feesPaid ? (await createPayment(tenantId, { id: userId }, { ...feesPaid, studentId: String(student._id) })).payment : null;
+  return { student: serializeStudent(student), ...(payment ? { payment } : {}) };
 }
 
 export async function updateStudent(tenantId, userId, id, input) {
@@ -247,6 +257,12 @@ export async function importStudents(tenantId, userId, { students: rows, onDupli
     }
     result.data.grade = cls.grade;
     result.data.section = cls.section;
+    const fees = importFeesSchema.safeParse(raw);
+    if (!fees.success) {
+      failed.push({ row, admissionNo: result.data.admissionNo, errors: fees.error.issues.map((i) => ({ field: i.path.join("."), message: i.message })) });
+      return;
+    }
+    result.fees = fees.data;
     const key = result.data.admissionNo.toLowerCase();
     if (seen.has(key)) {
       failed.push({
@@ -257,7 +273,7 @@ export async function importStudents(tenantId, userId, { students: rows, onDupli
       return;
     }
     seen.add(key);
-    valid.push({ row, data: result.data });
+    valid.push({ row, data: result.data, fees: result.fees });
   });
 
   const existing = await Student.find(
@@ -274,21 +290,26 @@ export async function importStudents(tenantId, userId, { students: rows, onDupli
   let created = 0;
   let updated = 0;
   let skipped = 0;
+  let insertedDocs = [];
 
   if (toInsert.length) {
     try {
-      const docs = await Student.insertMany(
+      insertedDocs = await Student.insertMany(
         toInsert.map((v) => ({ ...compact(v.data), tenantId, createdBy: userId, updatedBy: userId })),
         { ordered: false }
       );
-      created = docs.length;
+      created = insertedDocs.length;
     } catch (err) {
       // Another request inserted some of these admission numbers meanwhile
       if (!isDuplicateKey(err) && !err?.writeErrors) throw err;
-      created = err.insertedDocs?.length ?? err.result?.insertedCount ?? 0;
+      insertedDocs = err.insertedDocs ?? [];
+      created = insertedDocs.length || (err.result?.insertedCount ?? 0);
       skipped += toInsert.length - created;
     }
   }
+
+  // Fees already paid (only for students created now, so importing twice doesn't double them)
+  const feesRecorded = await recordImportedFees(tenantId, userId, insertedDocs, toInsert);
 
   if (onDuplicate === "update" && existingRows.length) {
     const result = await Student.bulkWrite(
@@ -308,5 +329,40 @@ export async function importStudents(tenantId, userId, { students: rows, onDupli
     skipped += existingRows.length;
   }
 
-  return { total: rows.length, created, updated, skipped, failed };
+  return { total: rows.length, created, updated, skipped, failed, feesRecorded };
+}
+
+/** Saves "Fees paid" from an import as fees paid before EduFlow; they become each student's advance. */
+async function recordImportedFees(tenantId, userId, insertedDocs, rows) {
+  const feesByNo = new Map(rows.filter((v) => v.fees?.feesPaid > 0).map((v) => [v.data.admissionNo, v.fees]));
+  const students = insertedDocs.filter((d) => feesByNo.has(d.admissionNo));
+  if (!students.length) return { students: 0, amount: 0 };
+  const receivedByName = (await User.findById(userId, { name: 1 }).lean())?.name ?? "";
+  const today = new Date().toISOString().slice(0, 10);
+  const first = await Counter.reserve(tenantId, "opening", students.length);
+  const docs = students.map((st, i) => {
+    const f = feesByNo.get(st.admissionNo);
+    return {
+      tenantId,
+      receiptNo: `OB${String(first + i).padStart(5, "0")}`,
+      kind: "opening",
+      studentId: st._id,
+      student: {
+        fullName: [st.firstName, st.lastName].filter(Boolean).join(" "),
+        admissionNo: st.admissionNo,
+        grade: st.grade || "",
+        section: st.section || "",
+        guardianName: st.guardianName || "",
+      },
+      date: f.feesPaidDate || today,
+      amount: f.feesPaid,
+      mode: f.feesPaidMode || "cash",
+      note: f.feesNote || "Paid before EduFlow (imported)",
+      allocations: [],
+      receivedBy: userId,
+      receivedByName,
+    };
+  });
+  await Payment.insertMany(docs);
+  return { students: docs.length, amount: docs.reduce((t, d) => t + d.amount, 0) };
 }

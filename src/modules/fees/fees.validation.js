@@ -81,7 +81,9 @@ export const createPaymentSchema = z.object({
   mode: z.enum(PAYMENT_MODES, { error: `Mode must be one of: ${PAYMENT_MODES.join(", ")}` }),
   reference: z.string().trim().max(100).default(""),
   note: z.string().trim().max(500).default(""),
-  // Omit to apply the payment to the oldest dues first
+  // "opening": paid before the school used EduFlow (not counted in collections)
+  kind: z.enum(["receipt", "opening"]).default("receipt"),
+  // Omit to apply the payment to the oldest dues first; whatever isn't applied is advance
   allocations: z
     .array(z.object({ invoiceId: objectId, amount: money("Allocation").min(1) }))
     .min(1)
@@ -119,6 +121,7 @@ export const listPaymentsQuery = z.object({
   mode: z.enum([...PAYMENT_MODES, "all"]).default("all"),
   search: z.string().trim().max(100).optional(),
   includeVoided: z.enum(["true", "false"]).default("true"),
+  kind: z.enum(["all", "receipt", "opening"]).default("all"),
 });
 
 export const exportPaymentsQuery = listPaymentsQuery.omit({ page: true, limit: true });

@@ -24,6 +24,7 @@ import { TRIAL_DAYS, computeAccess, ensureDefaultPlans, invalidateAccess } from 
 import { newSecret, otpauthUrl, verifyCode } from "./totp.js";
 import { hashPassword, verifyPassword } from "../../utils/password.js";
 import { verifyRefreshToken } from "../../utils/jwt.js";
+import { checkUploadPermission, forgetCloudinaryConfig, pingCloudinary } from "./cloudinary.js";
 
 const DAY_MS = 86_400_000;
 const oid = (id) => new mongoose.Types.ObjectId(String(id));
@@ -215,7 +216,7 @@ export async function schoolDetail(id) {
     Student.countDocuments({ tenantId: tid, status: "active" }),
     Student.countDocuments({ tenantId: tid }),
     Attendance.countDocuments({ tenantId: tid, date: { $gte: since7 } }),
-    Payment.aggregate([{ $match: { tenantId: tid, date: { $gte: monthStart }, "voided.at": { $exists: false } } }, { $group: { _id: null, amount: { $sum: "$amount" }, count: { $sum: 1 } } }]),
+    Payment.aggregate([{ $match: { tenantId: tid, date: { $gte: monthStart }, "voided.at": { $exists: false }, kind: { $ne: "opening" } } }, { $group: { _id: null, amount: { $sum: "$amount" }, count: { $sum: 1 } } }]),
     WhatsAppMessage.countDocuments({ tenantId: tid, createdAt: { $gte: new Date(Date.now() - 30 * DAY_MS) } }),
     Exam.countDocuments({ tenantId: tid }),
     TenantActivity.countDocuments({ tenantId: tid, day: { $gte: isoDay(Date.now() - 30 * DAY_MS) } }),
@@ -537,8 +538,10 @@ export async function twoFactorDisable(ctx, { code }) {
 let settingsCache = null;
 let settingsAt = 0;
 
+// What schools may see (support contact only)
 const serializeSettings = (s) => ({ supportWhatsapp: s?.supportWhatsapp ?? "", supportEmail: s?.supportEmail ?? "", updatedAt: s?.updatedAt ?? null });
 
+/** Support contact, cached; safe to show to schools. */
 export async function getSettings() {
   if (settingsCache && Date.now() - settingsAt < 60_000) return settingsCache;
   settingsCache = serializeSettings(await PlatformSettings.findOne({ key: "platform" }).lean());
@@ -546,12 +549,53 @@ export async function getSettings() {
   return settingsCache;
 }
 
-export async function saveSettings(ctx, data) {
-  const s = await PlatformSettings.findOneAndUpdate({ key: "platform" }, { $set: { ...data, updatedBy: ctx.adminId } }, { upsert: true, returnDocument: "after" }).lean();
-  settingsCache = serializeSettings(s);
-  settingsAt = Date.now();
-  await audit(ctx, { action: "platform.settings_update", targetType: "platform", metadata: data });
-  return settingsCache;
+/** Everything for the console; the Cloudinary secret is never sent back, only whether it's set. */
+export async function getAdminSettings() {
+  const s = await PlatformSettings.findOne({ key: "platform" }).lean();
+  const c = s?.cloudinary ?? {};
+  return {
+    ...serializeSettings(s),
+    cloudinary: { cloudName: c.cloudName ?? "", apiKey: c.apiKey ?? "", folder: c.folder || "eduflow", secretSet: Boolean(c.apiSecretEnc), secretReadable: Boolean(decrypt(c.apiSecretEnc)) },
+    encryptionAvailable: canEncrypt(),
+  };
+}
+
+export async function saveSettings(ctx, { cloudinary, ...data }) {
+  const set = { ...data, updatedBy: ctx.adminId };
+  if (cloudinary) {
+    const current = (await PlatformSettings.findOne({ key: "platform" }, { cloudinary: 1 }).lean())?.cloudinary ?? {};
+    // An empty secret keeps the saved one
+    const secret = cloudinary.apiSecret || decrypt(current.apiSecretEnc);
+    const clearing = !cloudinary.cloudName && !cloudinary.apiKey && !cloudinary.apiSecret;
+    if (!clearing) {
+      if (!cloudinary.cloudName || !cloudinary.apiKey || !secret) throw AppError.badRequest("Enter the cloud name, API key and API secret", "CLOUDINARY_INCOMPLETE");
+      if (!canEncrypt()) throw AppError.badRequest("Set DATA_ENCRYPTION_KEY on the server first; the API secret is stored encrypted.", "ENCRYPTION_UNAVAILABLE");
+      const keys = { cloudName: cloudinary.cloudName, apiKey: cloudinary.apiKey, apiSecret: secret, folder: cloudinary.folder };
+      await pingCloudinary(keys);
+      await checkUploadPermission(keys);
+    }
+    set.cloudinary = clearing
+      ? { cloudName: "", apiKey: "", apiSecretEnc: "", folder: cloudinary.folder || "eduflow" }
+      : { cloudName: cloudinary.cloudName, apiKey: cloudinary.apiKey, apiSecretEnc: cloudinary.apiSecret ? encrypt(cloudinary.apiSecret) : current.apiSecretEnc, folder: cloudinary.folder || "eduflow" };
+  }
+  await PlatformSettings.updateOne({ key: "platform" }, { $set: set }, { upsert: true });
+  settingsCache = null;
+  forgetCloudinaryConfig();
+  // Never log the secret
+  const logged = { ...data, ...(cloudinary ? { cloudinary: { cloudName: cloudinary.cloudName, apiKey: cloudinary.apiKey, folder: cloudinary.folder, secretChanged: Boolean(cloudinary.apiSecret) } } : {}) };
+  await audit(ctx, { action: "platform.settings_update", targetType: "platform", metadata: logged });
+  return getAdminSettings();
+}
+
+/** Checks the saved Cloudinary keys still work. */
+export async function testCloudinary() {
+  const c = (await PlatformSettings.findOne({ key: "platform" }, { cloudinary: 1 }).lean())?.cloudinary;
+  const apiSecret = decrypt(c?.apiSecretEnc);
+  if (!c?.cloudName || !c.apiKey || !apiSecret) throw AppError.badRequest("Cloudinary isn't set up yet", "CLOUDINARY_NOT_SET");
+  const keys = { cloudName: c.cloudName, apiKey: c.apiKey, apiSecret, folder: c.folder };
+  await pingCloudinary(keys);
+  await checkUploadPermission(keys);
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------

@@ -36,3 +36,39 @@ export const addMemberSchema = z.object({
 });
 
 export const updateMemberSchema = z.object({ role });
+
+const show = z.boolean();
+const accent = z.enum(["indigo", "emerald", "teal", "maroon", "orange", "slate"]);
+
+export const reportCardSettingsSchema = z
+  .object({
+    title: z.string().trim().min(2, "Title is too short").max(60),
+    monthlyTitle: z.string().trim().min(2, "Title is too short").max(60),
+    accent,
+    signatures: z.array(z.string().trim().max(40)).max(3),
+    note: optionalText(300),
+    paper: z.enum(["a5", "a4"]),
+    show: z
+      .object({
+        logo: show, schoolName: show, title: show, contact: show, admissionNo: show, rollNo: show, gradeColumn: show,
+        resultColumn: show, percentage: show, rank: show, resultBox: show, remarks: show, attendance: show,
+      })
+      .partial(),
+  })
+  .partial()
+  .refine((v) => Object.keys(v).length > 0, "Nothing to change");
+export const receiptSettingsSchema = z
+  .object({
+    title: z.string().trim().min(2, "Title is too short").max(60),
+    accent: z.enum(["indigo", "emerald", "teal", "maroon", "orange", "slate"]),
+    prefix: z.string().trim().min(1, "Enter a prefix").max(10).regex(/^[A-Za-z0-9/-]+$/, "Prefix: letters, digits, - and / only"),
+    signatureLabel: z.string().trim().max(60),
+    paper: z.enum(["a5", "a4"]),
+    twoCopies: z.boolean(),
+    receiptNote: optionalText(300),
+    show: z
+      .object({ logo: show, schoolName: show, title: show, contact: show, guardian: show, amountInWords: show, summary: show, concessions: show, receivedBy: show, signature: show, footer: show })
+      .partial(),
+  })
+  .partial()
+  .refine((v) => Object.keys(v).length > 0, "Nothing to change");

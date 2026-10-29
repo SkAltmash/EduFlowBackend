@@ -2,7 +2,7 @@
 import { Router } from "express";
 import * as controller from "./students.controller.js";
 import {
-  createStudentSchema,
+  createStudentWithFeesSchema,
   exportStudentsQuery,
   idParamSchema,
   importStudentsSchema,
@@ -33,7 +33,7 @@ router.get("/filters", controller.filters);
 router.get("/export", canManage, validateQuery(exportStudentsQuery), controller.exportAll);
 // CSV rows arrive as JSON; app.js gives this path a larger body limit
 router.post("/import", canManage, validateBody(importStudentsSchema), controller.importCsv);
-router.post("/", canManage, validateBody(createStudentSchema), controller.create);
+router.post("/", canManage, validateBody(createStudentWithFeesSchema), controller.create);
 router.get("/:studentId", controller.get);
 router.patch("/:studentId", canManage, validateBody(updateStudentSchema), controller.update);
 router.delete("/:studentId", canManage, controller.remove);

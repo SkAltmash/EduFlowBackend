@@ -8,6 +8,8 @@ import Tenant from "../../models/Tenant.js";
 import User from "../../models/User.js";
 import AppError from "../../utils/AppError.js";
 import { concessionLabel, discountFor as concessionDiscount, serializeConcession } from "./fees.concessions.js";
+import { advanceOf, advances, detachFromDues, settleStudent, settleStudents, unallocated } from "./fees.advance.js";
+import { receiptPrefix } from "../school/school.service.js";
 
 // All amounts are integers in paise.
 
@@ -66,6 +68,9 @@ function serializePayment(p) {
     student: p.student,
     date: p.date,
     amount: p.amount,
+    kind: p.kind || "receipt",
+    // Part of this payment not on any due yet (the student's advance)
+    advance: unallocated(p),
     mode: p.mode,
     reference: p.reference || "",
     note: p.note || "",
@@ -176,6 +181,8 @@ export async function updatePlan(tenantId, id, data) {
   Object.assign(plan, data);
   await plan.save();
   const duesUpdated = data.installments ? await syncPlanDues(tenantId, plan) : 0;
+  // Changed amounts can be paid from advance
+  if (duesUpdated) await settleStudents(tenantId, await Invoice.distinct("studentId", { tenantId, planId: plan._id }));
   return { ...(await getPlan(tenantId, plan._id)), duesUpdated };
 }
 
@@ -216,15 +223,22 @@ async function syncPlanDues(tenantId, plan) {
   return changed;
 }
 
-/** Takes one plan off one student (e.g. assigned by mistake), when nothing was paid on it. */
+/**
+ * Takes one plan off one student (e.g. assigned by mistake). Anything already paid on it
+ * becomes the student's advance and goes to their other unpaid dues.
+ */
 export async function removePlanFromStudent(tenantId, studentId, planId) {
   const dues = await Invoice.find({ tenantId, studentId, planId }, { paid: 1 }).lean();
   if (!dues.length) throw AppError.notFound("This student doesn't have that plan");
-  if (dues.some((d) => d.paid > 0)) {
-    throw AppError.conflict("Some of this plan's fees are already paid. Void those receipts first.", "PLAN_HAS_PAYMENTS");
-  }
-  const { deletedCount } = await Invoice.deleteMany({ tenantId, studentId, planId });
-  return { duesDeleted: deletedCount };
+  let duesDeleted = 0;
+  let moved = 0;
+  await mongoose.connection.transaction(async (session) => {
+    moved = sum(dues, (d) => d.paid);
+    if (moved) await detachFromDues(tenantId, dues.map((d) => d._id), session);
+    duesDeleted = (await Invoice.deleteMany({ tenantId, studentId, planId }, { session })).deletedCount;
+    await settleStudent(tenantId, studentId, session);
+  });
+  return { duesDeleted, movedToAdvance: moved };
 }
 
 /**
@@ -322,7 +336,9 @@ export async function assignPlan(tenantId, id, { grade, section, studentIds, con
     created = err.insertedDocs?.length ?? docs.length - writeErrors.length;
   }
 
-  return { students: students.length, created, skipped: docs.length - created };
+  // Students who paid before (advance) get these dues paid off straight away
+  const settled = created ? await settleStudents(tenantId, students.map((st) => st._id)) : { students: 0, applied: 0 };
+  return { students: students.length, created, skipped: docs.length - created, advanceApplied: settled.applied, advanceStudents: settled.students };
 }
 
 // ---------------------------------------------------------------------------
@@ -414,6 +430,7 @@ export async function feeRegister(tenantId, { page, limit, search, grade, sectio
   const total = result.total[0]?.n ?? 0;
   const totals = result.totals[0] ?? { billed: 0, discount: 0, paid: 0, balance: 0, overdue: 0 };
   delete totals._id;
+  const advanceOfRow = await advances(tenantId, result.rows.map((r) => r._id));
 
   return {
     students: result.rows.map((r) => ({
@@ -432,6 +449,7 @@ export async function feeRegister(tenantId, { page, limit, search, grade, sectio
       paid: r.paid,
       balance: r.balance,
       overdue: r.overdue,
+      advance: advanceOfRow.get(String(r._id)) ?? 0,
       nextDue: r.nextDue ?? null,
     })),
     totals,
@@ -450,6 +468,7 @@ export async function studentLedger(tenantId, studentId, { today = utcToday() } 
   ]);
 
   const dues = invoices.map((i) => serializeInvoice(i, today));
+  const advance = sum(payments, unallocated);
   return {
     student: {
       id: String(student._id),
@@ -470,6 +489,8 @@ export async function studentLedger(tenantId, studentId, { today = utcToday() } 
       paid: sum(dues, (d) => d.paid),
       balance: sum(dues, (d) => Math.max(0, d.balance)),
       overdue: sum(dues.filter((d) => d.status === "overdue"), (d) => d.balance),
+      // Paid but not on any due yet; used up automatically when dues are added
+      advance,
     },
   };
 }
@@ -478,24 +499,31 @@ export async function updateInvoice(tenantId, id, { discount, discountReason, du
   const inv = await Invoice.findOne({ _id: id, tenantId });
   if (!inv) throw AppError.notFound("Due not found");
   if (discount !== undefined) {
-    if (discount > inv.amount - inv.paid) {
-      throw AppError.badRequest("Discount can't be more than the unpaid amount", "DISCOUNT_TOO_HIGH");
-    }
+    if (discount > inv.amount) throw AppError.badRequest("Discount can't be more than the fee", "DISCOUNT_TOO_HIGH");
     inv.discount = discount;
     // A one-off change on this due: concession updates won't overwrite it
     inv.discountSource = discount ? "manual" : "";
   }
   if (discountReason !== undefined) inv.discountReason = discountReason;
   if (dueDate !== undefined) inv.dueDate = dueDate;
-  await inv.save();
-  return { due: serializeInvoice(inv, utcToday()) };
+  await mongoose.connection.transaction(async (session) => {
+    await inv.save({ session });
+    // Paid more than it now costs: the extra becomes advance (and pays other dues)
+    await settleStudent(tenantId, inv.studentId, session);
+  });
+  return { due: serializeInvoice(await Invoice.findById(inv._id).lean(), utcToday()) };
 }
 
+/** Deletes one due; anything paid on it becomes the student's advance. */
 export async function deleteInvoice(tenantId, id) {
   const inv = await Invoice.findOne({ _id: id, tenantId });
   if (!inv) throw AppError.notFound("Due not found");
-  if (inv.paid > 0) throw AppError.conflict("This due has payments. Void them first.", "DUE_HAS_PAYMENTS");
-  await inv.deleteOne();
+  await mongoose.connection.transaction(async (session) => {
+    if (inv.paid > 0) await detachFromDues(tenantId, [inv._id], session);
+    await Invoice.deleteOne({ _id: inv._id }, { session });
+    await settleStudent(tenantId, inv.studentId, session);
+  });
+  return { movedToAdvance: inv.paid };
 }
 
 // ---------------------------------------------------------------------------
@@ -503,11 +531,12 @@ export async function deleteInvoice(tenantId, id) {
 // ---------------------------------------------------------------------------
 
 /**
- * Records a payment and applies it to the student's dues (given allocations,
- * or oldest due first), all in one transaction with the receipt number.
+ * Records a payment and applies it to the student's dues (given allocations, or oldest due
+ * first), all in one transaction with the receipt number. Whatever isn't needed for dues
+ * stays as the student's advance. `kind: "opening"` records fees paid before EduFlow.
  */
 export async function createPayment(tenantId, user, data) {
-  const { studentId, amount, date, mode, reference, note, allocations } = data;
+  const { studentId, amount, date, mode, reference, note, allocations, kind = "receipt" } = data;
   const [student, receivedByName] = await Promise.all([Student.findOne({ _id: studentId, tenantId }).lean(), userName(user.id)]);
   if (!student) throw AppError.notFound("Student not found");
 
@@ -520,8 +549,9 @@ export async function createPayment(tenantId, user, data) {
 
     let plan; // [{ invoice, amount }]
     if (allocations) {
-      if (sum(allocations, (a) => a.amount) !== amount) {
-        throw AppError.badRequest("The amounts applied to dues must add up to the payment amount", "ALLOCATION_MISMATCH");
+      // Anything not applied to a due is kept as advance
+      if (sum(allocations, (a) => a.amount) > amount) {
+        throw AppError.badRequest("The amounts applied to dues are more than the payment", "ALLOCATION_MISMATCH");
       }
       plan = allocations.map((a) => {
         const inv = openById.get(a.invoiceId);
@@ -532,13 +562,7 @@ export async function createPayment(tenantId, user, data) {
         return { invoice: inv, amount: a.amount };
       });
     } else {
-      const outstanding = sum(open, balanceOf);
-      if (amount > outstanding) {
-        throw AppError.badRequest(
-          outstanding === 0 ? "This student has nothing to pay" : "The amount is more than the student's total balance",
-          "AMOUNT_EXCEEDS_BALANCE"
-        );
-      }
+      // More than the balance (or no dues yet): the rest is advance
       plan = [];
       let left = amount;
       for (const inv of open) {
@@ -561,12 +585,16 @@ export async function createPayment(tenantId, user, data) {
       }
     }
 
-    const seq = await Counter.next(tenantId, "receipt", session);
+    // Fees paid before EduFlow are numbered separately so EduFlow receipts stay in sequence
+    const opening = kind === "opening";
+    const seq = await Counter.next(tenantId, opening ? "opening" : "receipt", session);
+    const prefix = opening ? "OB" : await receiptPrefix(tenantId, session);
     const [payment] = await Payment.create(
       [
         {
           tenantId,
-          receiptNo: `R${String(seq).padStart(5, "0")}`,
+          receiptNo: `${prefix}${String(seq).padStart(5, "0")}`,
+          kind,
           studentId,
           student: {
             fullName: fullName(student),
@@ -614,12 +642,16 @@ export async function voidPayment(tenantId, user, id, { reason }) {
     for (const a of payment.allocations) {
       await Invoice.updateOne({ _id: a.invoiceId, tenantId }, { $inc: { paid: -a.amount } }, { session });
     }
+    // Reopened dues can be paid from the student's other advance
+    await settleStudent(tenantId, payment.studentId, session);
   });
   return getReceipt(tenantId, id);
 }
 
-function paymentFilter(tenantId, { from, to, mode, search, includeVoided }) {
+function paymentFilter(tenantId, { from, to, mode, search, includeVoided, kind }) {
   const filter = { tenantId };
+  if (kind === "receipt") filter.kind = { $ne: "opening" };
+  else if (kind === "opening") filter.kind = "opening";
   if (from || to) filter.date = { ...(from ? { $gte: from } : {}), ...(to ? { $lte: to } : {}) };
   if (mode && mode !== "all") filter.mode = mode;
   if (includeVoided === "false") filter["voided.at"] = { $exists: false };
@@ -636,7 +668,9 @@ export async function listPayments(tenantId, { page, limit, ...filters }) {
     Payment.find(filter).sort({ date: -1, createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
     Payment.countDocuments(filter),
     Payment.aggregate([
-      { $match: { ...filter, tenantId: oid(tenantId), "voided.at": { $exists: false } } },
+      // Totals are money collected in EduFlow: fees paid before EduFlow are listed but only
+      // added up when that's what's being looked at
+      { $match: { kind: { $ne: "opening" }, ...filter, tenantId: oid(tenantId), "voided.at": { $exists: false } } },
       { $group: { _id: null, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
     ]),
   ]);
@@ -656,9 +690,10 @@ export async function exportPayments(tenantId, filters) {
 export async function getReceipt(tenantId, id) {
   const payment = await Payment.findOne({ _id: id, tenantId }).lean();
   if (!payment) throw AppError.notFound("Payment not found");
-  const [tenant, open] = await Promise.all([
+  const [tenant, open, advance] = await Promise.all([
     Tenant.findById(tenantId).lean(),
     Invoice.find({ tenantId, studentId: payment.studentId }, { amount: 1, discount: 1, discountReason: 1, paid: 1, label: 1, planName: 1 }).lean(),
+    advanceOf(tenantId, payment.studentId),
   ]);
   // Concessions on the dues this payment went to, shown on the receipt
   const paidFor = new Set(payment.allocations.map((a) => String(a.invoiceId)));
@@ -671,6 +706,10 @@ export async function getReceipt(tenantId, id) {
     concessions,
     // The student's balance right now (after this and any later payments)
     currentBalance: sum(open, (i) => Math.max(0, balanceOf(i))),
+    // The student's advance right now (all payments)
+    currentAdvance: advance,
+    // Their whole fee account right now, for the summary on the receipt
+    account: { fee: sum(open, (i) => i.amount - i.discount), paid: sum(open, (i) => i.paid), balance: sum(open, (i) => Math.max(0, balanceOf(i))), advance },
   };
 }
 
@@ -680,7 +719,8 @@ export async function getReceipt(tenantId, id) {
 
 export async function summary(tenantId, { from, to, today = utcToday() }) {
   const tid = oid(tenantId);
-  const paid = { tenantId: tid, "voided.at": { $exists: false } };
+  // Collected in EduFlow: fees paid before EduFlow ("opening") don't count for their date
+  const paid = { tenantId: tid, "voided.at": { $exists: false }, kind: { $ne: "opening" } };
 
   const [collected, byMode, byDay, dues, byClass, upcoming, recent] = await Promise.all([
     Payment.aggregate([{ $match: { ...paid, date: { $gte: from, $lte: to } } }, { $group: { _id: null, amount: { $sum: "$amount" }, count: { $sum: 1 } } }]),
@@ -725,7 +765,7 @@ export async function summary(tenantId, { from, to, today = utcToday() }) {
       { $match: { balance: { $gt: 0 } } },
       { $group: { _id: null, amount: { $sum: "$balance" }, students: { $addToSet: "$studentId" } } },
     ]),
-    Payment.find({ tenantId }).sort({ createdAt: -1 }).limit(6).lean(),
+    Payment.find({ tenantId, kind: { $ne: "opening" } }).sort({ createdAt: -1 }).limit(6).lean(),
   ]);
 
   const d = dues[0] ?? { billed: 0, discount: 0, paid: 0, balance: 0, overdue: 0, overdueStudents: [] };

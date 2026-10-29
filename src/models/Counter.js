@@ -19,4 +19,10 @@ counterSchema.statics.next = async function next(tenantId, key, session) {
   return doc.seq;
 };
 
+/** Reserves `count` numbers at once and returns the first. */
+counterSchema.statics.reserve = async function reserve(tenantId, key, count, session) {
+  const doc = await this.findOneAndUpdate({ tenantId, key }, { $inc: { seq: count } }, { upsert: true, returnDocument: "after", session });
+  return doc.seq - count + 1;
+};
+
 export default mongoose.model("Counter", counterSchema);

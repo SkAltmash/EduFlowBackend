@@ -25,6 +25,14 @@ export const registerLimiter = limiter({
   message: "Too many accounts created from this IP. Please try again later.",
 });
 
+// SMS cost money. Per IP (a school office shares one, so not too low); the OTP module
+// also limits each number to one code per 30 s and 5 an hour
+export const otpLimiter = limiter({
+  windowMinutes: 15,
+  limit: 20,
+  message: "Too many codes requested. Please try again later.",
+});
+
 export const refreshLimiter = limiter({
   windowMinutes: 15,
   limit: 60,

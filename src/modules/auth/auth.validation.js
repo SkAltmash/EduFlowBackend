@@ -34,6 +34,8 @@ export const registerSchema = z.object({
     .min(2, "Organization name must be at least 2 characters")
     .max(150, "Organization name must be at most 150 characters")
     .optional(),
+  // From POST /api/auth/otp/verify (purpose "register"); required when the platform asks for it
+  phoneToken: z.string().max(2000).optional(),
 });
 
 // Login does not enforce the strength rules, so policy changes never lock users out
@@ -56,6 +58,14 @@ export const changePasswordSchema = z
     newPassword: strongPassword,
   })
   .refine((v) => v.currentPassword !== v.newPassword, { message: "Choose a password different from the current one", path: ["newPassword"] });
+
+const phone = z.string({ error: "Enter your mobile number" }).trim().min(10, "Enter a valid 10-digit mobile number").max(20);
+const otpCode = z.string().trim().regex(/^\d{4,8}$/, "Enter the code from the SMS");
+
+export const otpSendSchema = z.object({ phone, purpose: z.enum(["login", "register"]) });
+export const otpVerifySchema = z.object({ challengeId: z.string().trim().min(1).max(40), code: otpCode, purpose: z.enum(["login", "register"]) });
+export const phoneChangeSchema = z.object({ phone });
+export const phoneChangeVerifySchema = z.object({ challengeId: z.string().trim().min(1).max(40), code: otpCode });
 
 export const twoFactorSchema = z.object({
   token: z.string().min(10).max(2000),

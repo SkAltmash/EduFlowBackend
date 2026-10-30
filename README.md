@@ -177,6 +177,36 @@ router.get("/members", authenticate, authorize("owner", "admin"), handler);   //
 Status codes: `401` for a missing, invalid or expired token (`TOKEN_MISSING`,
 `TOKEN_INVALID`, `TOKEN_EXPIRED`), and `403` for a role that isn't allowed.
 
+### Mobile number + OTP ([otp.js](src/modules/auth/otp.js))
+
+SMS codes come from [2Factor.in](https://2factor.in). Super admins set it up in the console (Settings → SMS OTP):
+- API key (stored encrypted, needs `DATA_ENCRYPTION_KEY`) and an optional OTP template name.
+- An on/off switch, and whether new schools must verify a number.
+- A test send that works while OTP is off.
+
+2Factor generates and checks each code (`AUTOGEN` / `VERIFY`); we only store its session id.
+
+**Limits:**
+- A code lasts 10 minutes and allows 5 tries.
+- Each number gets one code per 30 seconds and at most 5 per hour.
+- Each IP can request 20 codes per 15 minutes.
+- Codes are single-use.
+
+Numbers are Indian mobiles, stored as `+91XXXXXXXXXX`, one account per number.
+
+| Method | Route | Body | Notes |
+|---|---|---|---|
+| GET | `/api/auth/options` | | `{ phoneLogin, phoneRequiredOnRegister }` for the sign-in and sign-up pages |
+| POST | `/api/auth/otp/send` | `{ phone, purpose: "login" \| "register" }` | sign-in only texts numbers with an account; sign-up refuses numbers already in use |
+| POST | `/api/auth/otp/verify` | `{ challengeId, code, purpose }` | login: signs in (same result as `/login`); register: `{ phoneToken, phone }` (valid 30 min) |
+| POST | `/api/auth/register` | `+ phoneToken` | required while "new schools must verify a number" is on |
+| POST | `/api/auth/me/phone/send` | `{ phone }` | add or change your number |
+| POST | `/api/auth/me/phone/verify` | `{ challengeId, code }` | saves it; returns `{ user }` |
+
+Super admins sign in with email and password only (OTP sign-in is refused for them).
+
+For local testing only, `OTP_FAKE=1` (ignored when `NODE_ENV=production`) sends no SMS and accepts `123456`.
+
 ## Frontend flow
 
 1. Register or log in. If `requiresTenantSelection` is true, show the tenant
@@ -593,8 +623,9 @@ Each school has a `subscription` (`status: trial | active | suspended`, `planId`
 | GET | `/api/admin/schools/:id/export` | | all of the school's data as JSON (DPDP access request) |
 | DELETE | `/api/admin/schools/:id` | `{ confirm: "<slug>" }` | deletes the school, all its data and accounts that belonged only to it |
 | GET / POST / PATCH | `/api/admin/plans[/:planId]` | plan | only one default plan |
-| GET / PUT | `/api/admin/settings` | `{ supportWhatsapp?, supportEmail?, cloudinary?: { cloudName, apiKey, apiSecret, folder } }` | support contact; Cloudinary keys (checked with Cloudinary's ping before saving; the secret is stored encrypted and never returned, empty = keep) |
+| GET / PUT | `/api/admin/settings` | `{ supportWhatsapp?, supportEmail?, cloudinary?: { cloudName, apiKey, apiSecret, folder }, otp?: { enabled, apiKey, template, requireOnRegister } }` | support contact; Cloudinary keys (checked with Cloudinary's ping before saving; the secret is stored encrypted and never returned, empty = keep) |
 | POST | `/api/admin/settings/cloudinary/test` | | checks the saved Cloudinary keys |
+| POST | `/api/admin/settings/otp/test` · `/otp/test/verify` | `{ phone }` · `{ challengeId, code }` | sends a real test SMS with the saved 2Factor key |
 | GET | `/api/admin/super-admins` | | |
 | POST | `/api/admin/super-admins` | `{ email, name?, password? }` | promotes an existing account, or creates one (name and password required) |
 | PATCH | `/api/admin/super-admins/:userId` | `{ name?, email? }` | any super admin, including yourself |

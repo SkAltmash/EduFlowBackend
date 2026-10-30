@@ -66,3 +66,16 @@ export async function updateMe(req, res) {
 export async function changePassword(req, res) {
   res.json(await authService.changePassword(req.user, req.body, req.cookies?.[REFRESH_COOKIE_NAME]));
 }
+
+export const options = async (req, res) => res.json(await authService.authOptions());
+export const sendOtp = async (req, res) => res.json(await authService.sendOtp(req.body, requestMeta(req)));
+
+export async function verifyOtp(req, res) {
+  const result = await authService.verifyOtp(req.body, requestMeta(req));
+  // Sign-up: just proof of the number. Sign-in: a session (or the school choice)
+  if (result.phoneToken || result.requiresTenantSelection || result.requiresTwoFactor) return res.json(result);
+  sendAuthResult(res, 200, result);
+}
+
+export const sendPhoneChange = async (req, res) => res.json(await authService.sendPhoneChange(req.user, req.body, requestMeta(req)));
+export const verifyPhoneChange = async (req, res) => res.json(await authService.verifyPhoneChange(req.user, req.body));

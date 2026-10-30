@@ -12,6 +12,9 @@ const userSchema = new mongoose.Schema(
       maxlength: 254,
     },
     passwordHash: { type: String, required: true, select: false },
+    // Mobile number in +91XXXXXXXXXX form, verified by OTP; used for OTP sign-in
+    phone: { type: String, trim: true, maxlength: 20 },
+    phoneVerifiedAt: { type: Date },
     isActive: { type: Boolean, default: true },
     // Platform-level administrator (manages every tenant). Set only through
     // the CLI (`npm run superadmin`) or by another super admin in the console. Hidden from queries by default.
@@ -35,5 +38,8 @@ const userSchema = new mongoose.Schema(
     },
   }
 );
+
+// One account per mobile number (only accounts that have one)
+userSchema.index({ phone: 1 }, { unique: true, partialFilterExpression: { phone: { $type: "string" } } });
 
 export default mongoose.model("User", userSchema);

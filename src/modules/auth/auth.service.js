@@ -18,12 +18,14 @@ import {
   signRefreshToken,
   signTenantSelectionToken,
   signTwoFactorToken,
+  signPhoneToken,
   TOKEN_TYPES,
   verifyAccessToken,
   verifyRefreshToken,
 } from "../../utils/jwt.js";
 import { decrypt } from "../../utils/crypto.js";
 import { verifyCode } from "../platform/totp.js";
+import { normalizePhone, otpConfig, startChallenge, verifyChallenge } from "./otp.js";
 
 const ROTATION_GRACE_MS = 30 * 1000;
 
@@ -43,6 +45,7 @@ export function serializeUser(user) {
     id: String(user._id),
     name: user.name,
     email: user.email,
+    phone: user.phone || "",
     isActive: user.isActive,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
@@ -194,9 +197,33 @@ async function revokeSessionFromToken(refreshToken, expectedUserId) {
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function register({ name, email, password, tenantName }, meta) {
+/** What the sign-in and sign-up pages offer (public). */
+export async function authOptions() {
+  const cfg = await otpConfig();
+  return { phoneLogin: cfg.enabled, phoneRequiredOnRegister: cfg.enabled && cfg.requireOnRegister };
+}
+
+/** The verified mobile number from a sign-up phone token, or null when none was sent. */
+function phoneFromToken(token) {
+  if (!token) return null;
+  try {
+    return verifyAccessToken(token, [TOKEN_TYPES.PHONE_VERIFIED]).sub;
+  } catch {
+    throw AppError.badRequest("Your mobile verification expired. Verify the number again.", "PHONE_TOKEN_EXPIRED");
+  }
+}
+
+export async function register({ name, email, password, tenantName, phoneToken }, meta) {
   if (await User.exists({ email })) {
     throw AppError.conflict("An account with this email already exists", "EMAIL_TAKEN");
+  }
+  const options = await authOptions();
+  const phone = phoneFromToken(phoneToken);
+  if (options.phoneRequiredOnRegister && !phone) {
+    throw AppError.badRequest("Verify your mobile number with the OTP first", "PHONE_REQUIRED", [{ field: "phone", message: "Verify your mobile number" }]);
+  }
+  if (phone && (await User.exists({ phone }))) {
+    throw AppError.conflict("This mobile number already has an account. Sign in instead.", "PHONE_TAKEN");
   }
 
   const passwordHash = await hashPassword(password);
@@ -206,7 +233,7 @@ export async function register({ name, email, password, tenantName }, meta) {
   try {
     // User, tenant and owner membership are created together or not at all
     await mongoose.connection.transaction(async (session) => {
-      [user] = await User.create([{ name, email, passwordHash }], { session });
+      [user] = await User.create([{ name, email, passwordHash, ...(phone ? { phone, phoneVerifiedAt: new Date() } : {}) }], { session });
 
       const orgName = tenantName || `${name}'s Organization`;
       const slug = await generateUniqueSlug(orgName, session);
@@ -240,6 +267,11 @@ export async function login({ email, password }, meta) {
     throw INVALID_CREDENTIALS();
   }
 
+  return finishLogin(user, meta);
+}
+
+/** After the password or OTP checked out: platform session, one school, or a school choice. */
+async function finishLogin(user, meta) {
   if (user.isSuperAdmin) {
     // Two-step login: the password alone isn't enough for platform access
     if (user.twoFactor?.enabled) {
@@ -470,4 +502,54 @@ export async function completeTwoFactor({ token, code }, meta) {
     throw AppError.unauthorized("That code isn't right. Check your authenticator app and try again.", "TWO_FACTOR_INVALID");
   }
   return { requiresTenantSelection: false, ...(await issuePlatformAuthResult({ user, meta })) };
+}
+
+// ---------------------------------------------------------------------------
+// Mobile number + OTP
+// ---------------------------------------------------------------------------
+
+/** Sends a sign-in or sign-up code. Sign-in only texts numbers that have an account. */
+export async function sendOtp({ phone: raw, purpose }, meta) {
+  const phone = normalizePhone(raw);
+  const user = await User.findOne({ phone }).select("+isSuperAdmin").lean();
+  if (purpose === "login") {
+    if (!user || !user.isActive) throw AppError.notFound("No account uses this mobile number. Sign in with email, or create an account.", "PHONE_NOT_FOUND");
+    if (user.isSuperAdmin) throw AppError.badRequest("Platform admins sign in with email and password.", "USE_PASSWORD");
+  } else if (user) {
+    throw AppError.conflict("This mobile number already has an account. Sign in instead.", "PHONE_TAKEN");
+  }
+  return startChallenge({ purpose, phone, userId: user?._id, ip: meta?.ip });
+}
+
+/** Checks a code: signs in (login) or returns a token proving the number (register). */
+export async function verifyOtp({ challengeId, code, purpose }, meta) {
+  const { phone } = await verifyChallenge({ challengeId, code, purpose });
+  if (purpose === "register") return { phoneToken: signPhoneToken(phone), phone };
+  const user = await User.findOne({ phone }).select("+isSuperAdmin");
+  if (!user?.isActive || user.isSuperAdmin) throw INVALID_CREDENTIALS();
+  return finishLogin(user, meta);
+}
+
+/** Own account: text a code to a new mobile number. */
+export async function sendPhoneChange(actor, { phone: raw }, meta) {
+  assertOwnAccount(actor);
+  const phone = normalizePhone(raw);
+  const taken = await User.findOne({ phone }, { _id: 1 }).lean();
+  if (taken && String(taken._id) !== String(actor.id)) throw AppError.conflict("Another account already uses this mobile number.", "PHONE_TAKEN");
+  if (taken) throw AppError.badRequest("That's already your mobile number.", "PHONE_SAME");
+  return startChallenge({ purpose: "phone_change", phone, userId: actor.id, ip: meta?.ip });
+}
+
+/** Own account: the code checked out, so save the number. */
+export async function verifyPhoneChange(actor, { challengeId, code }) {
+  assertOwnAccount(actor);
+  const { phone, userId } = await verifyChallenge({ challengeId, code, purpose: "phone_change" });
+  if (userId !== String(actor.id)) throw AppError.badRequest("This code was for another account.", "OTP_EXPIRED");
+  try {
+    const user = await User.findByIdAndUpdate(actor.id, { $set: { phone, phoneVerifiedAt: new Date() } }, { returnDocument: "after" });
+    return { user: serializeUser(user) };
+  } catch (err) {
+    if (err?.code === 11000) throw AppError.conflict("Another account already uses this mobile number.", "PHONE_TAKEN");
+    throw err;
+  }
 }

@@ -25,6 +25,7 @@ import { newSecret, otpauthUrl, verifyCode } from "./totp.js";
 import { hashPassword, verifyPassword } from "../../utils/password.js";
 import { verifyRefreshToken } from "../../utils/jwt.js";
 import { checkUploadPermission, forgetCloudinaryConfig, pingCloudinary } from "./cloudinary.js";
+import { forgetOtpConfig, normalizePhone, otpConfig, startChallenge, verifyChallenge } from "../auth/otp.js";
 
 const DAY_MS = 86_400_000;
 const oid = (id) => new mongoose.Types.ObjectId(String(id));
@@ -556,12 +557,27 @@ export async function getAdminSettings() {
   return {
     ...serializeSettings(s),
     cloudinary: { cloudName: c.cloudName ?? "", apiKey: c.apiKey ?? "", folder: c.folder || "eduflow", secretSet: Boolean(c.apiSecretEnc), secretReadable: Boolean(decrypt(c.apiSecretEnc)) },
+    otp: {
+      enabled: Boolean(s?.otp?.enabled),
+      keySet: Boolean(s?.otp?.apiKeyEnc),
+      keyReadable: Boolean(decrypt(s?.otp?.apiKeyEnc)),
+      template: s?.otp?.template ?? "",
+      requireOnRegister: s?.otp?.requireOnRegister !== false,
+    },
     encryptionAvailable: canEncrypt(),
   };
 }
 
-export async function saveSettings(ctx, { cloudinary, ...data }) {
+export async function saveSettings(ctx, { cloudinary, otp, ...data }) {
   const set = { ...data, updatedBy: ctx.adminId };
+  if (otp) {
+    const current = (await PlatformSettings.findOne({ key: "platform" }, { otp: 1 }).lean())?.otp ?? {};
+    // An empty key keeps the saved one
+    if (otp.apiKey && !canEncrypt()) throw AppError.badRequest("Set DATA_ENCRYPTION_KEY on the server first; the API key is stored encrypted.", "ENCRYPTION_UNAVAILABLE");
+    const apiKeyEnc = otp.apiKey ? encrypt(otp.apiKey) : current.apiKeyEnc || "";
+    if (otp.enabled && !decrypt(apiKeyEnc)) throw AppError.badRequest("Enter the 2Factor API key before turning OTP on.", "OTP_KEY_MISSING");
+    set.otp = { enabled: Boolean(otp.enabled), apiKeyEnc, template: otp.template ?? current.template ?? "", requireOnRegister: otp.requireOnRegister ?? current.requireOnRegister ?? true };
+  }
   if (cloudinary) {
     const current = (await PlatformSettings.findOne({ key: "platform" }, { cloudinary: 1 }).lean())?.cloudinary ?? {};
     // An empty secret keeps the saved one
@@ -581,8 +597,9 @@ export async function saveSettings(ctx, { cloudinary, ...data }) {
   await PlatformSettings.updateOne({ key: "platform" }, { $set: set }, { upsert: true });
   settingsCache = null;
   forgetCloudinaryConfig();
+  forgetOtpConfig();
   // Never log the secret
-  const logged = { ...data, ...(cloudinary ? { cloudinary: { cloudName: cloudinary.cloudName, apiKey: cloudinary.apiKey, folder: cloudinary.folder, secretChanged: Boolean(cloudinary.apiSecret) } } : {}) };
+  const logged = { ...data, ...(otp ? { otp: { enabled: otp.enabled, template: otp.template, requireOnRegister: otp.requireOnRegister, keyChanged: Boolean(otp.apiKey) } } : {}), ...(cloudinary ? { cloudinary: { cloudName: cloudinary.cloudName, apiKey: cloudinary.apiKey, folder: cloudinary.folder, secretChanged: Boolean(cloudinary.apiSecret) } } : {}) };
   await audit(ctx, { action: "platform.settings_update", targetType: "platform", metadata: logged });
   return getAdminSettings();
 }
@@ -688,4 +705,17 @@ export async function changeOwnPassword(ctx, { currentPassword, newPassword }, r
   const { modifiedCount } = await Session.updateMany({ userId: user._id, revokedAt: null, ...(keep ? { _id: { $ne: keep } } : {}) }, { $set: { revokedAt: new Date() } });
   await audit(ctx, { action: "superadmin.change_own_password", targetType: "user", targetId: user._id });
   return { signedOutSessions: modifiedCount };
+}
+
+/** Sends a real test OTP with the saved 2Factor key (works even while OTP is off). */
+export async function testOtpSend(ctx, { phone }) {
+  const cfg = await otpConfig();
+  if (!cfg.apiKey) throw AppError.badRequest("Save the 2Factor API key first.", "OTP_KEY_MISSING");
+  return startChallenge({ purpose: "test", phone: normalizePhone(phone), userId: ctx.adminId, ip: ctx.ip, config: cfg });
+}
+
+export async function testOtpVerify(ctx, { challengeId, code }) {
+  await verifyChallenge({ challengeId, code, purpose: "test" });
+  await audit(ctx, { action: "platform.otp_test", targetType: "platform" });
+  return { ok: true };
 }

@@ -12,6 +12,8 @@ export const TOKEN_TYPES = Object.freeze({
   PLATFORM: "platform",
   // Password checked, waiting for the super admin's authenticator code (POST /api/auth/two-factor)
   TWO_FACTOR: "two_factor",
+  // Mobile number verified by OTP during sign-up; sent with POST /api/auth/register
+  PHONE_VERIFIED: "phone_verified",
 });
 
 const ALGORITHM = "HS256";
@@ -65,6 +67,10 @@ export function signTenantSelectionToken(userId) {
 
 export function signTwoFactorToken(userId) {
   return jwt.sign({ sub: String(userId), type: TOKEN_TYPES.TWO_FACTOR }, env.JWT_ACCESS_SECRET, { ...baseSignOptions, expiresIn: "5m" });
+}
+
+export function signPhoneToken(phone) {
+  return jwt.sign({ sub: phone, type: TOKEN_TYPES.PHONE_VERIFIED }, env.JWT_ACCESS_SECRET, { ...baseSignOptions, expiresIn: "30m" });
 }
 
 export function signRefreshToken({ userId, sessionId, jti, expiresAt }) {

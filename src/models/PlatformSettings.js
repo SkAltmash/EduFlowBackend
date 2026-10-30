@@ -14,6 +14,15 @@ const platformSettingsSchema = new mongoose.Schema(
       apiSecretEnc: { type: String, default: "" },
       folder: { type: String, trim: true, maxlength: 100, default: "eduflow" },
     },
+    // SMS OTP through 2Factor.in (sign in with mobile, verify mobile at sign-up). API key encrypted.
+    otp: {
+      enabled: { type: Boolean, default: false },
+      apiKeyEnc: { type: String, default: "" },
+      // 2Factor OTP template name ("" = their default template)
+      template: { type: String, trim: true, maxlength: 60, default: "" },
+      // New accounts must verify a mobile number
+      requireOnRegister: { type: Boolean, default: true },
+    },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true }

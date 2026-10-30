@@ -71,6 +71,13 @@ const settingsSchema = z
       apiSecret: z.string().trim().max(200).default(""),
       folder: z.string().trim().max(100).regex(/^[a-z0-9_/-]*$/i, "Folder: letters, digits, - _ and /").default("eduflow"),
     }),
+    otp: z.object({
+      enabled: z.boolean(),
+      // Empty = keep the saved key
+      apiKey: z.string().trim().max(100).regex(/^[A-Za-z0-9-]*$/, "The API key has letters, digits and dashes only").default(""),
+      template: z.string().trim().max(60).regex(/^[A-Za-z0-9 _-]*$/, "Template name: letters, digits, spaces, - and _").default(""),
+      requireOnRegister: z.boolean().default(true),
+    }),
   })
   .partial();
 const superAdminSchema = z.object({ email, name: z.string().trim().min(2).max(100).optional(), password: strongPassword.optional() });
@@ -117,6 +124,10 @@ r.patch("/announcements/:announcementId", validateBody(announcementSchema.partia
 r.delete("/announcements/:announcementId", async (req, res) => res.json(await platform.deleteAnnouncement(ctx(req), req.params.announcementId)));
 
 r.get("/settings", async (req, res) => res.json(await platform.getAdminSettings()));
+r.post("/settings/otp/test", validateBody(z.object({ phone: z.string().trim().min(10).max(20) })), async (req, res) => res.json(await platform.testOtpSend(ctx(req), req.body)));
+r.post("/settings/otp/test/verify", validateBody(z.object({ challengeId: z.string().trim().min(1).max(40), code: z.string().trim().regex(/^\d{4,8}$/, "Enter the code") })), async (req, res) =>
+  res.json(await platform.testOtpVerify(ctx(req), req.body))
+);
 r.post("/settings/cloudinary/test", async (req, res) => res.json(await platform.testCloudinary()));
 r.put("/settings", validateBody(settingsSchema), async (req, res) => res.json(await platform.saveSettings(ctx(req), req.body)));
 

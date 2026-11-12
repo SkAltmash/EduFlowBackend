@@ -23,6 +23,14 @@ const platformSettingsSchema = new mongoose.Schema(
       // New accounts must verify a mobile number
       requireOnRegister: { type: Boolean, default: true },
     },
+    // AI assistant through Google's Gemini API. API key encrypted.
+    ai: {
+      enabled: { type: Boolean, default: false },
+      apiKeyEnc: { type: String, default: "" },
+      model: { type: String, trim: true, maxlength: 80, default: "gemini-3.8-flash" },
+      // Questions + drafts per school per month (0 = no limit)
+      monthlyQuota: { type: Number, min: 0, default: 300 },
+    },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true }

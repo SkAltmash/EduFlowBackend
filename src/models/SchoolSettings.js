@@ -47,6 +47,12 @@ const schoolSettingsSchema = new mongoose.Schema(
         footer: { type: Boolean, default: true },
       },
     },
+    // The school agreed to use the AI assistant (its data is sent to Google's Gemini to answer)
+    ai: {
+      enabled: { type: Boolean, default: false },
+      enabledBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      enabledAt: { type: Date },
+    },
     // How report cards and monthly progress reports look (Settings → Report cards)
     reportCard: {
       title: { type: String, trim: true, maxlength: 60, default: "Report card" },

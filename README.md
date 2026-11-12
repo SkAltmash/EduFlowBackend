@@ -543,6 +543,40 @@ Owners, admins and teachers unless noted.
 New WhatsApp message types: `homework` (refs `{ homeworkId, studentId }`) and `notice`
 (refs `{ noticeId, studentId }`); Settings → WhatsApp lists their templates.
 
+## AI assistant ([src/modules/ai](src/modules/ai))
+
+"Ask EduFlow" answers questions about the school's records, and "Write with AI" drafts notices,
+homework and messages, using Google Gemini (`@google/genai`, kept below 3.x). Three switches must be on:
+
+1. **Platform**: Console → Settings → AI assistant (Gemini API key stored encrypted, model, questions per school per month).
+2. **Plan**: the `aiAssistant` feature. Unlike other features it's **opt-in**: a plan has it only when ticked (the default Pro plan does; existing plans don't until edited). A school override works too.
+3. **School**: an owner or admin turns it on in Settings → AI assistant, agreeing that the question and needed records are sent to Gemini.
+
+| Endpoint | Who | Notes |
+| --- | --- | --- |
+| `GET /api/ai/status` | everyone | `state: ready\|off\|quota\|not_in_plan\|unavailable`, usage this month |
+| `PUT /api/ai/settings` `{ enabled }` | owner, admin | school opt-in (audit logged) |
+| `GET /api/ai/history?limit` | owner, admin | recent questions and drafts, who asked |
+| `POST /api/ai/chat` `{ question, chatId?, language?: auto\|en\|hi\|mr }` | everyone | **Server-Sent Events**: `start`, `tool { name }`, `text { delta }`, `chat { id, title }` (the turn was saved), then `done { usage }` or `error { code, message }`. Without `chatId` a new chat starts; the last 10 messages of the chat are sent to the model. Errors before streaming (`AI_OFF`, `AI_QUOTA`, `AI_CHAT_NOT_FOUND`…) are normal JSON |
+| `GET /api/ai/chats?q`, `GET/PATCH/DELETE /api/ai/chats/:id`, `DELETE /api/ai/chats` | everyone | the member's **own** chat history (`AiChat`, removed 180 days after last use): list (pinned first, search by title), open, `{ title?, pinned? }`, delete one or all |
+| `POST /api/ai/write` `{ kind: notice\|whatsapp\|fee_reminder\|homework\|remark, language: en\|hi\|mr, tone?, prompt, draft? }` | everyone | `{ text }`; `draft` improves existing text |
+| `GET /api/ai/actions/:id`, `POST /api/ai/actions/:id/confirm` `{ studentId, …edits }`, `POST /api/ai/actions/:id/cancel` | the member who asked | changes the assistant **prepared** (`fee_payment`, `attendance`, `class_attendance` — a whole class's register from one sentence, sent as `{ date, entries: [{ studentId, status }] }` —, `student_note`) with its `prepare_*` tools. Nothing is written until confirm: the member picks the student when several in their school match, can edit the details, and confirming runs the normal service (`createPayment`, `saveRegister`, notes) with their role's rules, once, audit logged (`ai.fee_payment`…). Pending actions expire after 30 minutes |
+| `GET /api/ai/summary?language=en\|hi\|mr&refresh=1` | everyone (AI on) | the dashboard's **daily summary**: today's numbers for what the role can see (same as the dashboard: unmarked classes, students absent 3+ days this week, below 75% this month, latest tests, overdue fees, collections), turned by Gemini into 3–5 points `{ tone, title, detail, link, ask }`. Cached per school, view (owners/admins, accountants, each limited teacher) and language for the day (`AiSummary`, 7 days); refresh at most every 20 minutes; not counted in the monthly limit. Without the AI it's written from the numbers |
+| `POST /api/ai/messages` `{ studentIds (≤ 40), purpose: fees\|attendance\|progress\|custom, note?, language }` | fee staff for `fees`, teaching staff for `attendance`/`progress` | one personal WhatsApp message per student for their parent, from what the member may see; `{ messages: [{ studentId, studentName, guardianName, class, to, text, skip? }] }`. Sent by the member one by one with wa.me links (standard messages still go through `/api/whatsapp`). Fee messages skip families with nothing due |
+| `GET /api/admin/settings/ai/usage`, `POST /api/admin/settings/ai/test` | super admin | usage per school (this and last month); a tiny test request |
+
+Chat runs a loop of up to 5 model ↔ tool rounds ([ai.service.js](src/modules/ai/ai.service.js)). The model's turn is
+sent back unchanged (thought signatures included) followed by `functionResponse` parts. The tools
+([ai.tools.js](src/modules/ai/ai.tools.js)) are **read-only** and run as the signed-in member:
+teachers get no fee tools and only their assigned classes; accountants get no attendance or test tools.
+Results are capped at 40 rows and carry `/app/...` links that the app renders as links (other URLs are shown as text).
+
+Every question and draft is logged in `AiQuery` (kept 180 days) and counts toward the school's monthly
+quota; each member is also limited to 30 per 10 minutes.
+
+For local testing only, `AI_FAKE=1` (ignored when `NODE_ENV=production`) uses a scripted model: save the
+key `fake` in the console. It calls one tool chosen from keywords in the question and echoes the result.
+
 ## Super admin (platform administration)
 
 A super admin manages **every** tenant and user. This is a flag on the user

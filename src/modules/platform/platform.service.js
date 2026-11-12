@@ -7,7 +7,7 @@ import AuditLog from "../../models/AuditLog.js";
 import Exam from "../../models/Exam.js";
 import Membership from "../../models/Membership.js";
 import Payment from "../../models/Payment.js";
-import PlatformPlan, { PLAN_FEATURES } from "../../models/PlatformPlan.js";
+import PlatformPlan, { PLAN_FEATURES, planHas } from "../../models/PlatformPlan.js";
 import PlatformSettings from "../../models/PlatformSettings.js";
 import SchoolSettings from "../../models/SchoolSettings.js";
 import Session from "../../models/Session.js";
@@ -25,6 +25,8 @@ import { newSecret, otpauthUrl, verifyCode } from "./totp.js";
 import { hashPassword, verifyPassword } from "../../utils/password.js";
 import { verifyRefreshToken } from "../../utils/jwt.js";
 import { checkUploadPermission, forgetCloudinaryConfig, pingCloudinary } from "./cloudinary.js";
+import { DEFAULT_MODEL, forgetAiConfig, pingGemini } from "../ai/gemini.js";
+import AiQuery from "../../models/AiQuery.js";
 import { forgetOtpConfig, normalizePhone, otpConfig, startChallenge, verifyChallenge } from "../auth/otp.js";
 
 const DAY_MS = 86_400_000;
@@ -400,7 +402,7 @@ export async function deleteSchool(ctx, id, { confirm }) {
 // ---------------------------------------------------------------------------
 
 function serializePlan(p, schools = 0) {
-  return { id: String(p._id), name: p.name, description: p.description ?? "", priceMonthly: p.priceMonthly, priceYearly: p.priceYearly, studentLimit: p.studentLimit, features: { ...Object.fromEntries(PLAN_FEATURES.map((f) => [f, true])), ...asObject(p.features) }, isDefault: p.isDefault, archived: p.archived, order: p.order, schools };
+  return { id: String(p._id), name: p.name, description: p.description ?? "", priceMonthly: p.priceMonthly, priceYearly: p.priceYearly, studentLimit: p.studentLimit, features: Object.fromEntries(PLAN_FEATURES.map((f) => [f, planHas(asObject(p.features), f)])), isDefault: p.isDefault, archived: p.archived, order: p.order, schools };
 }
 
 export async function listPlans() {
@@ -564,12 +566,29 @@ export async function getAdminSettings() {
       template: s?.otp?.template ?? "",
       requireOnRegister: s?.otp?.requireOnRegister !== false,
     },
+    ai: {
+      enabled: Boolean(s?.ai?.enabled),
+      keySet: Boolean(s?.ai?.apiKeyEnc),
+      keyReadable: Boolean(decrypt(s?.ai?.apiKeyEnc)),
+      model: s?.ai?.model || DEFAULT_MODEL,
+      monthlyQuota: s?.ai?.monthlyQuota ?? 300,
+    },
     encryptionAvailable: canEncrypt(),
   };
 }
 
-export async function saveSettings(ctx, { cloudinary, otp, ...data }) {
+export async function saveSettings(ctx, { cloudinary, otp, ai, ...data }) {
   const set = { ...data, updatedBy: ctx.adminId };
+  if (ai) {
+    const current = (await PlatformSettings.findOne({ key: "platform" }, { ai: 1 }).lean())?.ai ?? {};
+    // An empty key keeps the saved one
+    if (ai.apiKey && !canEncrypt()) throw AppError.badRequest("Set DATA_ENCRYPTION_KEY on the server first; the API key is stored encrypted.", "ENCRYPTION_UNAVAILABLE");
+    const apiKey = ai.apiKey || decrypt(current.apiKeyEnc);
+    if (ai.enabled && !apiKey) throw AppError.badRequest("Enter the Gemini API key before turning AI on.", "AI_KEY_MISSING");
+    // Check a new key or model with a tiny request before saving
+    if (apiKey && (ai.apiKey || ai.model !== current.model || (ai.enabled && !current.enabled))) await pingGemini({ apiKey, model: ai.model });
+    set.ai = { enabled: Boolean(ai.enabled), apiKeyEnc: ai.apiKey ? encrypt(ai.apiKey) : current.apiKeyEnc || "", model: ai.model, monthlyQuota: ai.monthlyQuota };
+  }
   if (otp) {
     const current = (await PlatformSettings.findOne({ key: "platform" }, { otp: 1 }).lean())?.otp ?? {};
     // An empty key keeps the saved one
@@ -598,8 +617,9 @@ export async function saveSettings(ctx, { cloudinary, otp, ...data }) {
   settingsCache = null;
   forgetCloudinaryConfig();
   forgetOtpConfig();
+  forgetAiConfig();
   // Never log the secret
-  const logged = { ...data, ...(otp ? { otp: { enabled: otp.enabled, template: otp.template, requireOnRegister: otp.requireOnRegister, keyChanged: Boolean(otp.apiKey) } } : {}), ...(cloudinary ? { cloudinary: { cloudName: cloudinary.cloudName, apiKey: cloudinary.apiKey, folder: cloudinary.folder, secretChanged: Boolean(cloudinary.apiSecret) } } : {}) };
+  const logged = { ...data, ...(otp ? { otp: { enabled: otp.enabled, template: otp.template, requireOnRegister: otp.requireOnRegister, keyChanged: Boolean(otp.apiKey) } } : {}), ...(ai ? { ai: { enabled: ai.enabled, model: ai.model, monthlyQuota: ai.monthlyQuota, keyChanged: Boolean(ai.apiKey) } } : {}), ...(cloudinary ? { cloudinary: { cloudName: cloudinary.cloudName, apiKey: cloudinary.apiKey, folder: cloudinary.folder, secretChanged: Boolean(cloudinary.apiSecret) } } : {}) };
   await audit(ctx, { action: "platform.settings_update", targetType: "platform", metadata: logged });
   return getAdminSettings();
 }
@@ -705,6 +725,43 @@ export async function changeOwnPassword(ctx, { currentPassword, newPassword }, r
   const { modifiedCount } = await Session.updateMany({ userId: user._id, revokedAt: null, ...(keep ? { _id: { $ne: keep } } : {}) }, { $set: { revokedAt: new Date() } });
   await audit(ctx, { action: "superadmin.change_own_password", targetType: "user", targetId: user._id });
   return { signedOutSessions: modifiedCount };
+}
+
+/** A tiny Gemini request with the saved key and model. */
+export async function testAi(ctx) {
+  const a = (await PlatformSettings.findOne({ key: "platform" }, { ai: 1 }).lean())?.ai ?? {};
+  const apiKey = decrypt(a.apiKeyEnc);
+  if (!apiKey) throw AppError.badRequest("Save the Gemini API key first.", "AI_KEY_MISSING");
+  const started = Date.now();
+  const r = await pingGemini({ apiKey, model: a.model || DEFAULT_MODEL });
+  await audit(ctx, { action: "platform.ai_test", targetType: "platform" });
+  return { ...r, ms: Date.now() - started };
+}
+
+/** AI use this month and last, per school (most used first). */
+export async function aiUsage() {
+  const month = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }).slice(0, 7);
+  const [y, m] = month.split("-").map(Number);
+  const previous = `${m === 1 ? y - 1 : y}-${String(m === 1 ? 12 : m - 1).padStart(2, "0")}`;
+  const rows = await AiQuery.aggregate([
+    { $match: { month: { $in: [month, previous] } } },
+    { $group: { _id: { t: "$tenantId", m: "$month" }, questions: { $sum: 1 }, failed: { $sum: { $cond: ["$ok", 0, 1] } }, inputTokens: { $sum: "$inputTokens" }, outputTokens: { $sum: "$outputTokens" } } },
+  ]);
+  const tenants = await Tenant.find({ _id: { $in: [...new Set(rows.map((r) => String(r._id.t)))] } }, { name: 1 }).lean();
+  const nameOf = new Map(tenants.map((t) => [String(t._id), t.name]));
+  const summarise = (mon) => {
+    const list = rows.filter((r) => r._id.m === mon);
+    return {
+      month: mon,
+      questions: list.reduce((t, r) => t + r.questions, 0),
+      inputTokens: list.reduce((t, r) => t + r.inputTokens, 0),
+      outputTokens: list.reduce((t, r) => t + r.outputTokens, 0),
+      schools: list
+        .map((r) => ({ id: String(r._id.t), name: nameOf.get(String(r._id.t)) ?? "(deleted)", questions: r.questions, failed: r.failed, inputTokens: r.inputTokens, outputTokens: r.outputTokens }))
+        .sort((a, b) => b.questions - a.questions),
+    };
+  };
+  return { current: summarise(month), previous: summarise(previous) };
 }
 
 /** Sends a real test OTP with the saved 2Factor key (works even while OTP is off). */

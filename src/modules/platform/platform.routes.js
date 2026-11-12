@@ -78,6 +78,13 @@ const settingsSchema = z
       template: z.string().trim().max(60).regex(/^[A-Za-z0-9 _-]*$/, "Template name: letters, digits, spaces, - and _").default(""),
       requireOnRegister: z.boolean().default(true),
     }),
+    ai: z.object({
+      enabled: z.boolean(),
+      // Empty = keep the saved key
+      apiKey: z.string().trim().max(300).regex(/^\S*$/, "The API key can't contain spaces").default(""),
+      model: z.string().trim().min(1, "Choose a model").max(80).regex(/^[a-z0-9.-]+$/, "Model ids look like gemini-3.8-flash"),
+      monthlyQuota: z.coerce.number().int().min(0).max(100000),
+    }),
   })
   .partial();
 const superAdminSchema = z.object({ email, name: z.string().trim().min(2).max(100).optional(), password: strongPassword.optional() });
@@ -128,6 +135,8 @@ r.post("/settings/otp/test", validateBody(z.object({ phone: z.string().trim().mi
 r.post("/settings/otp/test/verify", validateBody(z.object({ challengeId: z.string().trim().min(1).max(40), code: z.string().trim().regex(/^\d{4,8}$/, "Enter the code") })), async (req, res) =>
   res.json(await platform.testOtpVerify(ctx(req), req.body))
 );
+r.post("/settings/ai/test", async (req, res) => res.json(await platform.testAi(ctx(req))));
+r.get("/settings/ai/usage", async (req, res) => res.json(await platform.aiUsage()));
 r.post("/settings/cloudinary/test", async (req, res) => res.json(await platform.testCloudinary()));
 r.put("/settings", validateBody(settingsSchema), async (req, res) => res.json(await platform.saveSettings(ctx(req), req.body)));
 

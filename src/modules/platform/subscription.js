@@ -1,5 +1,5 @@
 // Subscription status, limits and feature access for a school, plus activity tracking.
-import PlatformPlan, { PLAN_FEATURES } from "../../models/PlatformPlan.js";
+import PlatformPlan, { OPT_IN_FEATURES, PLAN_FEATURES, planHas } from "../../models/PlatformPlan.js";
 import Student from "../../models/Student.js";
 import Tenant from "../../models/Tenant.js";
 import TenantActivity from "../../models/TenantActivity.js";
@@ -12,7 +12,7 @@ const DAY_MS = 86_400_000;
 
 const DEFAULT_PLANS = [
   { name: "Basic", description: "Students, attendance, fees, tests and WhatsApp click-to-send.", priceMonthly: 99900, priceYearly: 999000, studentLimit: 300, features: { whatsappApi: false, homework: true, timetable: true, performance: true }, isDefault: true, order: 1 },
-  { name: "Pro", description: "Everything, plus automatic WhatsApp and unlimited students.", priceMonthly: 199900, priceYearly: 1999000, studentLimit: 0, features: { whatsappApi: true, homework: true, timetable: true, performance: true }, order: 2 },
+  { name: "Pro", description: "Everything, plus automatic WhatsApp and unlimited students.", priceMonthly: 199900, priceYearly: 1999000, studentLimit: 0, features: { whatsappApi: true, homework: true, timetable: true, performance: true, aiAssistant: true }, order: 2 },
 ];
 
 /** Creates the starting plans the first time they're needed. */
@@ -44,7 +44,8 @@ export function computeAccess(tenant, plan) {
   const now = Date.now();
   const planFeatures = plan ? asObject(plan.features) : {};
   const overrides = asObject(tenant.featureOverrides);
-  const features = Object.fromEntries(PLAN_FEATURES.map((f) => [f, overrides[f] ?? (plan ? planFeatures[f] !== false : true)]));
+  // No plan yet: everything that's free to run is on; paid-per-use features are off
+  const features = Object.fromEntries(PLAN_FEATURES.map((f) => [f, overrides[f] ?? (plan ? planHas(planFeatures, f) : !OPT_IN_FEATURES.includes(f))]));
   const studentLimit = tenant.studentLimitOverride ?? (plan?.studentLimit || 0);
 
   let status = "none";

@@ -1,7 +1,11 @@
 import mongoose from "mongoose";
 
 /** Features a plan can include; anything not listed is part of every plan. */
-export const PLAN_FEATURES = Object.freeze(["whatsappApi", "homework", "timetable", "performance"]);
+export const PLAN_FEATURES = Object.freeze(["whatsappApi", "homework", "timetable", "performance", "aiAssistant"]);
+// Features a plan must switch on explicitly (they cost money per use); the rest are on unless switched off
+export const OPT_IN_FEATURES = Object.freeze(["aiAssistant"]);
+/** Whether a plan's saved features include `f`. */
+export const planHas = (features, f) => (OPT_IN_FEATURES.includes(f) ? features?.[f] === true : features?.[f] !== false);
 
 // What a school subscribes to. Prices in paise; studentLimit 0 = unlimited.
 const platformPlanSchema = new mongoose.Schema(

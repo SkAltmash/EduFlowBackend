@@ -24,6 +24,7 @@ import correctionsRouter from "./modules/classroom/corrections.js";
 import noticesRouter from "./modules/classroom/notices.js";
 import timetableRouter from "./modules/classroom/timetable.js";
 import syllabusRouter from "./modules/classroom/syllabus.js";
+import aiRouter from "./modules/ai/ai.routes.js";
 import { tenantStatusRouter } from "./modules/platform/platform.routes.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 
@@ -78,6 +79,7 @@ app.use("/api/whatsapp", whatsappRouter);
 app.use("/api/exams", examsRouter);
 app.use("/api/dashboard", dashboardRouter);
 app.use("/api/school", schoolRouter);
+app.use("/api/ai", aiRouter);
 app.use("/api/academics", academicsRouter);
 app.use("/api/performance", performanceRouter);
 app.use("/api/teaching", teachingRouter);

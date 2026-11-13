@@ -12,6 +12,8 @@ const messageSchema = new mongoose.Schema(
     tools: [{ type: String }],
     // Changes the answer prepared for the member to confirm (AiAction ids)
     actions: [{ type: String }],
+    // Suggested next questions shown under the answer
+    followups: [{ type: String }],
     at: { type: Date, default: Date.now },
   },
   { _id: false }

@@ -4,6 +4,7 @@
 // small (at most MAX_ROWS rows) and carry `link`s to the app's pages.
 import mongoose from "mongoose";
 import Attendance from "../../models/Attendance.js";
+import Payment from "../../models/Payment.js";
 import Student from "../../models/Student.js";
 import { ROLES } from "../../models/Membership.js";
 import { classReport, listClasses, studentHistory } from "../attendance/attendance.service.js";
@@ -19,6 +20,7 @@ const fullName = (s) => [s.firstName, s.lastName].filter(Boolean).join(" ");
 const cls = (grade, section) => (grade ? (section ? `${grade}-${section}` : grade) : "");
 const studentLink = (id) => `/app/students?student=${id}`;
 const feeLink = (id) => `/app/fees?student=${id}`;
+const receiptLink = (id) => `/app/fees?receipt=${id}`;
 
 /** Today and the first of this month, in India time (YYYY-MM-DD). */
 export function indiaToday() {
@@ -237,6 +239,58 @@ const TOOLS = [
         byMode: s.byMode.map((m) => ({ mode: m.mode, amount: rupees(m.amount), receipts: m.count })),
         allDues: { balance: rupees(s.dues.balance), overdue: rupees(s.dues.overdue), overdueStudents: s.dues.overdueStudents, collectionRatePercent: s.dues.collectionRate },
         dueInNext30Days: rupees(s.upcoming.amount),
+      };
+    },
+  },
+  {
+    name: "student_receipts",
+    roles: FEE_ROLES,
+    description:
+      "A student's fee receipts (latest first) with receipt number, date, amount and mode, and a link that opens the receipt to print or send. Give the student's name or admission number directly (no need for find_students).",
+    parameters: {
+      type: "object",
+      properties: {
+        student: { type: "string", description: "Name or admission number" },
+        limit: { type: "integer", description: "How many receipts (default 5)" },
+      },
+      required: ["student"],
+    },
+    async run(ctx, a) {
+      const words = String(a.student ?? "").trim().split(/\s+/).filter(Boolean).slice(0, 4);
+      if (!words.length) throw new ToolError("Which student?");
+      const esc = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const students = await Student.find(
+        { tenantId: ctx.tenantId, $and: words.map((w) => ({ $or: [{ firstName: new RegExp(`^${esc(w)}`, "i") }, { lastName: new RegExp(`^${esc(w)}`, "i") }, { admissionNo: new RegExp(`^${esc(w)}$`, "i") }] })) },
+        { firstName: 1, lastName: 1, grade: 1, section: 1, admissionNo: 1 }
+      )
+        .limit(6)
+        .lean();
+      if (!students.length) throw new ToolError(`No student matching "${a.student}" in this school.`);
+      const limit = Math.min(Math.max(Number(a.limit) || 5, 1), 20);
+      const payments = await Payment.find({ tenantId: ctx.tenantId, studentId: { $in: students.map((s) => s._id) } }, { receiptNo: 1, studentId: 1, date: 1, amount: 1, mode: 1, kind: 1, voided: 1, createdAt: 1 })
+        .sort({ date: -1, createdAt: -1 })
+        .limit(limit * students.length)
+        .lean();
+      return {
+        ...(students.length > 1 ? { note: `${students.length} students match; receipts for each are listed. Ask the user which one if it matters.` } : {}),
+        students: students.map((s) => ({
+          name: fullName(s),
+          class: cls(s.grade, s.section),
+          admissionNo: s.admissionNo,
+          feeAccountLink: feeLink(s._id),
+          receipts: payments
+            .filter((p) => String(p.studentId) === String(s._id))
+            .slice(0, limit)
+            .map((p) => ({
+              receiptNo: p.receiptNo,
+              date: p.date,
+              amount: rupees(p.amount),
+              mode: p.mode,
+              ...(p.kind === "opening" ? { paidBeforeEduFlow: true } : {}),
+              ...(p.voided?.at ? { voided: true } : {}),
+              link: receiptLink(p._id),
+            })),
+        })),
       };
     },
   },

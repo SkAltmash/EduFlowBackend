@@ -18,7 +18,7 @@ import { feeRegister } from "../fees/fees.service.js";
 import { canTeachClass, classFilter, teacherScope } from "../teaching/teaching.scope.js";
 import { indiaToday } from "./ai.tools.js";
 import { status } from "./ai.service.js";
-import { aiConfig, geminiClient } from "./gemini.js";
+import { aiConfig, generate } from "./gemini.js";
 
 const REFRESH_AFTER_MS = 20 * 60_000;
 const LANGUAGES = { en: "English", hi: "Hindi (Devanagari script)", mr: "Marathi (Devanagari script)" };
@@ -166,8 +166,7 @@ export async function dailySummary(user, { language = "en", refresh = false }) {
   let ai = false;
   const usage = { input: 0, output: 0 };
   try {
-    const r = await geminiClient(cfg.apiKey).models.generateContent({
-      model: cfg.model,
+    const r = await generate(cfg, {
       contents: `SUMMARY_FACTS: ${JSON.stringify(facts)}`,
       config: {
         systemInstruction: `You write today's short briefing for ${member?.name?.split(" ")[0] ?? "a staff member"} (${user.role}) on the EduFlow dashboard of ${tenant?.name ?? "a school"} in India.
@@ -188,7 +187,7 @@ Write in ${LANGUAGES[lang]}, with digits 0-9 and amounts like ₹12,500. Use onl
         },
         abortSignal: AbortSignal.timeout(45_000),
       },
-    });
+    }, "minimal");
     usage.input = r.usageMetadata?.promptTokenCount ?? 0;
     usage.output = (r.usageMetadata?.candidatesTokenCount ?? 0) + (r.usageMetadata?.thoughtsTokenCount ?? 0);
     const out = JSON.parse(r.text ?? "{}");

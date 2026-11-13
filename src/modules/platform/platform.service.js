@@ -572,6 +572,7 @@ export async function getAdminSettings() {
       keyReadable: Boolean(decrypt(s?.ai?.apiKeyEnc)),
       model: s?.ai?.model || DEFAULT_MODEL,
       monthlyQuota: s?.ai?.monthlyQuota ?? 300,
+      thinking: s?.ai?.thinking || "low",
     },
     encryptionAvailable: canEncrypt(),
   };
@@ -587,7 +588,7 @@ export async function saveSettings(ctx, { cloudinary, otp, ai, ...data }) {
     if (ai.enabled && !apiKey) throw AppError.badRequest("Enter the Gemini API key before turning AI on.", "AI_KEY_MISSING");
     // Check a new key or model with a tiny request before saving
     if (apiKey && (ai.apiKey || ai.model !== current.model || (ai.enabled && !current.enabled))) await pingGemini({ apiKey, model: ai.model });
-    set.ai = { enabled: Boolean(ai.enabled), apiKeyEnc: ai.apiKey ? encrypt(ai.apiKey) : current.apiKeyEnc || "", model: ai.model, monthlyQuota: ai.monthlyQuota };
+    set.ai = { enabled: Boolean(ai.enabled), apiKeyEnc: ai.apiKey ? encrypt(ai.apiKey) : current.apiKeyEnc || "", model: ai.model, monthlyQuota: ai.monthlyQuota, thinking: ai.thinking ?? current.thinking ?? "low" };
   }
   if (otp) {
     const current = (await PlatformSettings.findOne({ key: "platform" }, { otp: 1 }).lean())?.otp ?? {};
@@ -619,7 +620,7 @@ export async function saveSettings(ctx, { cloudinary, otp, ai, ...data }) {
   forgetOtpConfig();
   forgetAiConfig();
   // Never log the secret
-  const logged = { ...data, ...(otp ? { otp: { enabled: otp.enabled, template: otp.template, requireOnRegister: otp.requireOnRegister, keyChanged: Boolean(otp.apiKey) } } : {}), ...(ai ? { ai: { enabled: ai.enabled, model: ai.model, monthlyQuota: ai.monthlyQuota, keyChanged: Boolean(ai.apiKey) } } : {}), ...(cloudinary ? { cloudinary: { cloudName: cloudinary.cloudName, apiKey: cloudinary.apiKey, folder: cloudinary.folder, secretChanged: Boolean(cloudinary.apiSecret) } } : {}) };
+  const logged = { ...data, ...(otp ? { otp: { enabled: otp.enabled, template: otp.template, requireOnRegister: otp.requireOnRegister, keyChanged: Boolean(otp.apiKey) } } : {}), ...(ai ? { ai: { enabled: ai.enabled, model: ai.model, monthlyQuota: ai.monthlyQuota, thinking: ai.thinking, keyChanged: Boolean(ai.apiKey) } } : {}), ...(cloudinary ? { cloudinary: { cloudName: cloudinary.cloudName, apiKey: cloudinary.apiKey, folder: cloudinary.folder, secretChanged: Boolean(cloudinary.apiSecret) } } : {}) };
   await audit(ctx, { action: "platform.settings_update", targetType: "platform", metadata: logged });
   return getAdminSettings();
 }
@@ -745,7 +746,18 @@ export async function aiUsage() {
   const previous = `${m === 1 ? y - 1 : y}-${String(m === 1 ? 12 : m - 1).padStart(2, "0")}`;
   const rows = await AiQuery.aggregate([
     { $match: { month: { $in: [month, previous] } } },
-    { $group: { _id: { t: "$tenantId", m: "$month" }, questions: { $sum: 1 }, failed: { $sum: { $cond: ["$ok", 0, 1] } }, inputTokens: { $sum: "$inputTokens" }, outputTokens: { $sum: "$outputTokens" } } },
+    {
+      $group: {
+        _id: { t: "$tenantId", m: "$month" },
+        questions: { $sum: 1 },
+        failed: { $sum: { $cond: ["$ok", 0, 1] } },
+        inputTokens: { $sum: "$inputTokens" },
+        outputTokens: { $sum: "$outputTokens" },
+        // Chat answers only (drafts and summaries have no timing)
+        chatMs: { $sum: { $cond: [{ $and: [{ $eq: ["$kind", "chat"] }, { $gt: ["$durationMs", 0] }] }, "$durationMs", 0] } },
+        timed: { $sum: { $cond: [{ $and: [{ $eq: ["$kind", "chat"] }, { $gt: ["$durationMs", 0] }] }, 1, 0] } },
+      },
+    },
   ]);
   const tenants = await Tenant.find({ _id: { $in: [...new Set(rows.map((r) => String(r._id.t)))] } }, { name: 1 }).lean();
   const nameOf = new Map(tenants.map((t) => [String(t._id), t.name]));
@@ -756,8 +768,10 @@ export async function aiUsage() {
       questions: list.reduce((t, r) => t + r.questions, 0),
       inputTokens: list.reduce((t, r) => t + r.inputTokens, 0),
       outputTokens: list.reduce((t, r) => t + r.outputTokens, 0),
+      // Average time for a chat answer, in seconds
+      avgAnswerSeconds: list.reduce((t, r) => t + r.timed, 0) ? Math.round(list.reduce((t, r) => t + r.chatMs, 0) / list.reduce((t, r) => t + r.timed, 0) / 100) / 10 : null,
       schools: list
-        .map((r) => ({ id: String(r._id.t), name: nameOf.get(String(r._id.t)) ?? "(deleted)", questions: r.questions, failed: r.failed, inputTokens: r.inputTokens, outputTokens: r.outputTokens }))
+        .map((r) => ({ id: String(r._id.t), name: nameOf.get(String(r._id.t)) ?? "(deleted)", questions: r.questions, failed: r.failed, inputTokens: r.inputTokens, outputTokens: r.outputTokens, avgAnswerSeconds: r.timed ? Math.round(r.chatMs / r.timed / 100) / 10 : null }))
         .sort((a, b) => b.questions - a.questions),
     };
   };

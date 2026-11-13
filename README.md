@@ -548,7 +548,7 @@ New WhatsApp message types: `homework` (refs `{ homeworkId, studentId }`) and `n
 "Ask EduFlow" answers questions about the school's records, and "Write with AI" drafts notices,
 homework and messages, using Google Gemini (`@google/genai`, kept below 3.x). Three switches must be on:
 
-1. **Platform**: Console → Settings → AI assistant (Gemini API key stored encrypted, model, questions per school per month).
+1. **Platform**: Console → Settings → AI assistant (Gemini API key stored encrypted, model, questions per school per month, **answer speed**: how much the model thinks — `minimal`, `low` (default) or the model's default; a model that rejects a thinking level is asked again without it and remembered).
 2. **Plan**: the `aiAssistant` feature. Unlike other features it's **opt-in**: a plan has it only when ticked (the default Pro plan does; existing plans don't until edited). A school override works too.
 3. **School**: an owner or admin turns it on in Settings → AI assistant, agreeing that the question and needed records are sent to Gemini.
 
@@ -565,7 +565,7 @@ homework and messages, using Google Gemini (`@google/genai`, kept below 3.x). Th
 | `POST /api/ai/messages` `{ studentIds (≤ 40), purpose: fees\|attendance\|progress\|custom, note?, language }` | fee staff for `fees`, teaching staff for `attendance`/`progress` | one personal WhatsApp message per student for their parent, from what the member may see; `{ messages: [{ studentId, studentName, guardianName, class, to, text, skip? }] }`. Sent by the member one by one with wa.me links (standard messages still go through `/api/whatsapp`). Fee messages skip families with nothing due |
 | `GET /api/admin/settings/ai/usage`, `POST /api/admin/settings/ai/test` | super admin | usage per school (this and last month); a tiny test request |
 
-Chat runs a loop of up to 5 model ↔ tool rounds ([ai.service.js](src/modules/ai/ai.service.js)). The model's turn is
+Lookups the model asks for in the same turn run in parallel, and each answer's time is logged (`AI chat: 4.2s, 2 round(s), model 4.0s, lookups 0.2s`) and stored (`AiQuery.durationMs`; the console shows the average). Tools include `student_receipts` (fee staff), which links each receipt to `/app/fees?receipt=<paymentId>`. Chat runs a loop of up to 5 model ↔ tool rounds ([ai.service.js](src/modules/ai/ai.service.js)). The model's turn is
 sent back unchanged (thought signatures included) followed by `functionResponse` parts. The tools
 ([ai.tools.js](src/modules/ai/ai.tools.js)) are **read-only** and run as the signed-in member:
 teachers get no fee tools and only their assigned classes; accountants get no attendance or test tools.
@@ -573,6 +573,28 @@ Results are capped at 40 rows and carry `/app/...` links that the app renders as
 
 Every question and draft is logged in `AiQuery` (kept 180 days) and counts toward the school's monthly
 quota; each member is also limited to 30 per 10 minutes.
+
+### Presentations ([ai.slides.js](src/modules/ai/ai.slides.js))
+
+AI presentations, saved per member (`AiDeck`), edited in the app and downloaded as PowerPoint or PDF:
+
+| Endpoint | Who | Notes |
+| --- | --- | --- |
+| `GET /api/ai/decks/sources` | everyone | which kinds this role can make, and tests with marks (in the teacher's classes) |
+| `POST /api/ai/decks/outline` `{ topic, audience?, slides: 5-15, language }` | everyone | topic decks, step 1: `{ outline: { title, slides: [{ title, points }] } }` to edit (1 question) |
+| `POST /api/ai/decks` `{ kind: topic, topic, audience?, language, theme?, outline }` | everyone | writes the slides from the (edited) outline (4 questions) |
+| `POST /api/ai/decks` `{ kind: class_results, examId, showNames?, language, theme? }` | owner, admin, teacher (own classes) | a test's results for a PTM (4 questions) |
+| `POST /api/ai/decks` `{ kind: monthly_review, month: YYYY-MM, language, theme? }` | owner, admin | attendance, fees and tests for a month (4 questions) |
+| `GET /api/ai/decks`, `GET/PATCH/DELETE /api/ai/decks/:id` | the member who made it | list (with the cover slide), open, save edits `{ title?, theme?, slides? }`, delete |
+| `POST /api/ai/decks/:id/slides/:index/regenerate` `{ instruction? }` | the member who made it | rewrites one slide (1 question) |
+
+For the data decks the server builds every number slide (stats, charts, tables) from the records and
+Gemini only writes titles, one-line captions, speaker notes and the narrative slides, so no figure is
+invented; rewriting a number slide changes its words, never its numbers. Results decks never name
+students who failed (they're shown to parents); toppers are named unless `showNames` is false. Slides
+are JSON (`layout: title|section|bullets|two_column|stats|chart|table|quote|closing`) cleaned on every
+save. Quota: requests carry `AiQuery.units` (an outline 1, a deck 4, a slide 1) and a request that
+doesn't fit the month's remaining questions is refused up front.
 
 For local testing only, `AI_FAKE=1` (ignored when `NODE_ENV=production`) uses a scripted model: save the
 key `fake` in the console. It calls one tool chosen from keywords in the question and echoes the result.

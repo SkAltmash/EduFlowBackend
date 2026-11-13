@@ -84,6 +84,7 @@ const settingsSchema = z
       apiKey: z.string().trim().max(300).regex(/^\S*$/, "The API key can't contain spaces").default(""),
       model: z.string().trim().min(1, "Choose a model").max(80).regex(/^[a-z0-9.-]+$/, "Model ids look like gemini-3.8-flash"),
       monthlyQuota: z.coerce.number().int().min(0).max(100000),
+      thinking: z.enum(["minimal", "low", "default"]).default("low"),
     }),
   })
   .partial();

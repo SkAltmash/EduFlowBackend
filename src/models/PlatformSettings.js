@@ -30,6 +30,8 @@ const platformSettingsSchema = new mongoose.Schema(
       model: { type: String, trim: true, maxlength: 80, default: "gemini-3.8-flash" },
       // Questions + drafts per school per month (0 = no limit)
       monthlyQuota: { type: Number, min: 0, default: 300 },
+      // How much the model thinks before answering: less is faster and cheaper
+      thinking: { type: String, enum: ["minimal", "low", "default"], default: "low" },
     },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   },

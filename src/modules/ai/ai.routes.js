@@ -9,6 +9,7 @@ import AppError from "../../utils/AppError.js";
 import * as ai from "./ai.service.js";
 import { cancelAction, confirmAction, getAction } from "./ai.actions.js";
 import { dailySummary } from "./ai.summary.js";
+import * as slides from "./ai.slides.js";
 
 const router = Router();
 const manage = authorize(ROLES.OWNER, ROLES.ADMIN);
@@ -81,6 +82,52 @@ const confirmSchema = z.object({
 router.get("/actions/:actionId", async (req, res) => res.json(await getAction(req.user, req.params.actionId)));
 router.post("/actions/:actionId/confirm", validateBody(confirmSchema), async (req, res) => res.json(await confirmAction(req.user, ctx(req), req.params.actionId, req.body)));
 router.post("/actions/:actionId/cancel", async (req, res) => res.json(await cancelAction(req.user, req.params.actionId)));
+// Presentations
+const lang = z.enum(["en", "hi", "mr"]).optional().default("en");
+const outlineSchema = z.object({
+  topic: z.string().trim().min(3, "Say what the presentation is about").max(300),
+  audience: z.string().trim().max(120).optional().default(""),
+  slides: z.coerce.number().int().min(5).max(15).optional().default(10),
+  language: lang,
+});
+const deckSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("topic"),
+    topic: z.string().trim().min(3).max(300),
+    audience: z.string().trim().max(120).optional().default(""),
+    language: lang,
+    theme: z.enum(slides.DECK_THEMES).optional(),
+    outline: z.object({
+      title: z.string().trim().max(140),
+      slides: z.array(z.object({ title: z.string().trim().min(1).max(140), points: z.array(z.string().max(120)).max(4).optional().default([]) })).min(2).max(15),
+    }),
+  }),
+  z.object({ kind: z.literal("class_results"), examId: objectId, showNames: z.boolean().optional().default(true), language: lang, theme: z.enum(slides.DECK_THEMES).optional() }),
+  z.object({ kind: z.literal("monthly_review"), month: z.string().regex(/^\d{4}-\d{2}$/, "Choose a month"), language: lang, theme: z.enum(slides.DECK_THEMES).optional() }),
+]);
+const updateDeckSchema = z
+  .object({ title: z.string().trim().min(1).max(140).optional(), theme: z.enum(slides.DECK_THEMES).optional(), slides: z.array(z.record(z.string(), z.unknown())).min(1).max(20).optional() })
+  .refine((d) => d.title !== undefined || d.theme !== undefined || d.slides !== undefined, { message: "Nothing to change" });
+router.param("deckId", (req, res, next, value) => {
+  if (!objectId.safeParse(value).success) throw AppError.badRequest("Invalid presentation id", "INVALID_ID");
+  next();
+});
+router.get("/decks", async (req, res) => res.json(await slides.listDecks(req.user)));
+router.get("/decks/sources", async (req, res) => res.json(await slides.deckSources(req.user)));
+router.post("/decks/outline", validateBody(outlineSchema), async (req, res) => res.json(await slides.outline(req.user, req.body)));
+router.post("/decks", validateBody(deckSchema), async (req, res) => res.status(201).json(await slides.createDeck(req.user, req.body)));
+router.get("/decks/:deckId", async (req, res) => res.json(await slides.getDeck(req.user, req.params.deckId)));
+router.patch("/decks/:deckId", validateBody(updateDeckSchema), async (req, res) => res.json(await slides.updateDeck(req.user, req.params.deckId, req.body)));
+router.delete("/decks/:deckId", async (req, res) => res.json(await slides.deleteDeck(req.user, req.params.deckId)));
+router.post("/decks/:deckId/slides", validateBody(z.object({ after: z.coerce.number().int().min(0).max(19), instruction: z.string().trim().min(3, "Say what the slide should be").max(300) })), async (req, res) =>
+  res.status(201).json(await slides.insertSlide(req.user, req.params.deckId, req.body))
+);
+router.post("/decks/:deckId/translate", validateBody(z.object({ language: z.enum(["en", "hi", "mr"]) })), async (req, res) => res.json(await slides.translateDeck(req.user, req.params.deckId, req.body)));
+router.post("/decks/:deckId/slides/:index/regenerate", validateBody(z.object({ instruction: z.string().trim().max(300).optional().default("") })), async (req, res) => {
+  const index = Number(req.params.index);
+  if (!Number.isInteger(index) || index < 0 || index >= 20) throw AppError.badRequest("Invalid slide", "INVALID_ID");
+  res.json(await slides.regenerateSlide(req.user, req.params.deckId, index, req.body));
+});
 router.post("/messages", validateBody(messagesSchema), async (req, res) => res.json(await ai.suggestMessages(req.user, { ...req.body, studentIds: [...new Set(req.body.studentIds)] })));
 router.post("/write", validateBody(writeSchema), async (req, res) => res.json(await ai.write(req.user, req.body)));
 

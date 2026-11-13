@@ -37,6 +37,7 @@ import "../src/models/AiQuery.js";
 import "../src/models/AiChat.js";
 import "../src/models/AiAction.js";
 import "../src/models/AiSummary.js";
+import "../src/models/AiDeck.js";
 import "../src/models/SubscriptionPayment.js";
 import "../src/models/PlatformPlan.js";
 

@@ -5,7 +5,7 @@ import mongoose from "mongoose";
 // export. Private to the member who made it.
 export const DECK_KINDS = Object.freeze(["topic", "class_results", "monthly_review"]);
 export const DECK_THEMES = Object.freeze(["classic", "midnight", "sunrise", "chalk"]);
-export const SLIDE_LAYOUTS = Object.freeze(["title", "section", "bullets", "two_column", "stats", "chart", "table", "quote", "closing"]);
+export const SLIDE_LAYOUTS = Object.freeze(["title", "section", "bullets", "two_column", "stats", "chart", "table", "quote", "image", "closing"]);
 export const MAX_SLIDES = 20;
 
 const aiDeckSchema = new mongoose.Schema(

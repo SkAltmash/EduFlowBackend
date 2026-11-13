@@ -24,6 +24,8 @@ const tenantSchema = new mongoose.Schema(
     },
     // Per-school overrides of the plan (null/undefined = use the plan)
     studentLimitOverride: { type: Number, min: 0 },
+    // AI questions a month for this school (unset: the platform's default)
+    aiQuotaOverride: { type: Number, min: 0 },
     featureOverrides: { type: Map, of: Boolean, default: undefined },
     lastActiveAt: Date,
     // Private notes by the EduFlow team

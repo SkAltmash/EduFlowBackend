@@ -85,6 +85,19 @@ export async function checkUploadPermission({ cloudName, apiKey, apiSecret, fold
   return true;
 }
 
+/** Uploads an image from the server (e.g. one the AI made), returning its https URL. */
+export async function uploadDataUri(dataUri, folder) {
+  const cfg = await cloudinaryConfig();
+  if (!cfg) throw AppError.badRequest("Image uploads aren't set up on EduFlow yet. Contact support.", "UPLOADS_NOT_CONFIGURED");
+  const timestamp = Math.floor(Date.now() / 1000);
+  const params = { folder: `${cfg.folder}/${folder}`, timestamp };
+  const body = new URLSearchParams({ ...params, file: dataUri, api_key: cfg.apiKey, signature: sign(params, cfg.apiSecret) });
+  const res = await fetch(`https://api.cloudinary.com/v1_1/${cfg.cloudName}/image/upload`, { method: "POST", body, signal: AbortSignal.timeout(30_000) }).catch(() => null);
+  const data = await res?.json().catch(() => null);
+  if (!res?.ok || !data?.secure_url) throw new AppError(502, `The image couldn't be saved (${data?.error?.message ?? "upload failed"}).`, "UPLOAD_FAILED");
+  return data.secure_url;
+}
+
 /** Deletes an uploaded image (best effort: a failure here never blocks the caller). */
 export async function destroyImage(publicId) {
   const cfg = await cloudinaryConfig();

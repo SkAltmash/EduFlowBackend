@@ -7,7 +7,7 @@ const aiQuerySchema = new mongoose.Schema(
     tenantId: { type: mongoose.Schema.Types.ObjectId, ref: "Tenant", required: true },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     // "summary": the dashboard's daily summary (doesn't count toward the monthly limit)
-    kind: { type: String, enum: ["chat", "write", "summary", "slides"], required: true },
+    kind: { type: String, enum: ["chat", "write", "summary", "slides", "remarks", "image"], required: true },
     // How many questions it counts as toward the monthly limit (a whole presentation counts more)
     units: { type: Number, default: 1, min: 0 },
     // "YYYY-MM" (UTC) for the monthly quota

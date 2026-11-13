@@ -17,12 +17,13 @@ import { classReport } from "../attendance/attendance.service.js";
 import { getExam, listExams } from "../exams/exams.service.js";
 import { summary as feeSummary } from "../fees/fees.service.js";
 import { canTeachClass, teacherScope } from "../teaching/teaching.scope.js";
+import { cloudinaryConfig, sign, uploadDataUri } from "../platform/cloudinary.js";
 import { addUsage, assertReady, log } from "./ai.service.js";
 import { indiaToday } from "./ai.tools.js";
-import { generate, geminiError } from "./gemini.js";
+import { aiConfig, generate, geminiError, imagesReady, makeImage } from "./gemini.js";
 
 // How many of the school's monthly AI questions each step counts as
-export const UNITS = { outline: 1, deck: 4, slide: 1, insert: 1, translate: 2 };
+export const UNITS = { outline: 1, deck: 4, slide: 1, insert: 1, translate: 2, image: 2 };
 
 const TEACHING = [ROLES.OWNER, ROLES.ADMIN, ROLES.TEACHER];
 const MANAGERS = [ROLES.OWNER, ROLES.ADMIN];
@@ -74,6 +75,10 @@ export function cleanSlide(s) {
     const head = strings(s.table.head, 8, 60);
     out.table = { head, rows: (Array.isArray(s.table.rows) ? s.table.rows : []).slice(0, 15).map((r) => (Array.isArray(r) ? r.slice(0, head.length).map((c) => str(String(c ?? ""), 80)) : [])) };
   }
+  // Pictures live on our Cloudinary account (uploaded by the member, or made by the AI)
+  if (s.image && typeof s.image === "object" && /^https:\/\/res\.cloudinary\.com\/[\w-]+\/image\/upload\//.test(String(s.image.url))) {
+    out.image = { url: String(s.image.url).slice(0, 500), alt: str(s.image.alt, 160), source: s.image.source === "ai" ? "ai" : "upload" };
+  }
   if (s.chart && typeof s.chart === "object") {
     const labels = strings(s.chart.labels, 31, 40);
     out.chart = {
@@ -102,6 +107,12 @@ const SLIDE_JSON = {
     notes: { type: "string" },
   },
   required: ["layout", "title"],
+};
+
+// Topic decks may also ask for picture slides: "imagePrompt" describes the picture to draw
+const TOPIC_SLIDE_JSON = {
+  ...SLIDE_JSON,
+  properties: { ...SLIDE_JSON.properties, layout: { type: "string", enum: [...SLIDE_JSON.properties.layout.enum, "image"] }, imagePrompt: { type: "string" } },
 };
 
 const STYLE = (language) => `Write in ${LANGUAGES[language] ?? "English"} (digits 0-9; amounts like ₹12,500).
@@ -295,6 +306,8 @@ export async function createDeck(user, input) {
   const theme = DECK_THEMES.includes(input.theme) ? input.theme : "classic";
   const cfg = await assertReady(user, UNITS.deck);
   const school = await schoolOf(user);
+  // Pictures drawn while the deck is written (topic decks, when AI pictures are on): 2 for a short deck, 3 otherwise
+  const pictures = kind === "topic" && input.pictures !== false && imagesReady(cfg) ? ((input.outline?.slides?.length ?? 0) <= 6 ? 2 : 3) : 0;
   let title, slides, source;
 
   if (kind === "topic") {
@@ -305,15 +318,20 @@ export async function createDeck(user, input) {
       question: `[deck] ${input.topic ?? plan.title}`.slice(0, 500),
       units: UNITS.deck,
       system: `You write presentation slides for ${school}, a school in India. Follow the outline exactly: one slide per outline item, in order, keeping its title (you may polish it).
-Choose each slide's layout: "title" for the first; "closing" for the last (a thank-you or key takeaway); otherwise "bullets", "two_column" (comparisons, before/after, do/don't), "quote" (a short memorable line), "table" (small, factual), "section" (a divider) or "stats" (2 to 4 big numbers, only well-known facts).
+Choose each slide's layout: "title" for the first; "closing" for the last (a thank-you or key takeaway); otherwise "bullets", "image" (2 to 4 bullets beside a picture), "two_column" (comparisons, before/after, do/don't, pros/cons), "quote" (a short memorable line), "table" (small, factual: steps, examples, terms and meanings), "section" (a divider) or "stats" (2 to 4 big numbers, only well-known facts).
+Make the deck varied and visual, like a professional designer: never two "bullets" slides in a row; use ${pictures ? `"image" for ${pictures} slides spread through the deck (each with "imagePrompt": one sentence describing a simple illustration for it, with no words or letters in it), ` : ""}at least one "two_column", and a "table", "quote" or "stats" where it fits.
 Be accurate for school students; no made-up statistics.${input.audience ? ` Audience: ${input.audience}.` : ""} ${STYLE(language)}
 Every slide has "notes". Return {"slides": [..]}.`,
       contents: `DECK_TOPIC: ${JSON.stringify({ topic: input.topic, outline: plan })}`,
-      schema: { type: "object", properties: { slides: { type: "array", items: SLIDE_JSON } }, required: ["slides"] },
+      schema: { type: "object", properties: { slides: { type: "array", items: pictures ? TOPIC_SLIDE_JSON : SLIDE_JSON } }, required: ["slides"] },
     });
     title = str(plan.title, 140) || str(input.topic, 140) || "Presentation";
-    slides = (Array.isArray(out?.slides) ? out.slides : []).map(cleanSlide).filter(Boolean);
+    const raw = (Array.isArray(out?.slides) ? out.slides : []).filter((x) => x && typeof x === "object");
+    slides = raw.map(cleanSlide);
     if (slides[0]) slides[0] = { ...slides[0], layout: "title", subtitle: slides[0].subtitle || school };
+    if (pictures) await addPictures(user, cfg, slides, raw, pictures, str(input.topic, 200));
+    else slides = slides.map((x) => (x.layout === "image" ? { ...x, layout: "bullets" } : x));
+    slides = slides.filter(Boolean);
     source = { topic: str(input.topic, 300), audience: str(input.audience, 120) };
   } else if (kind === "class_results" || kind === "monthly_review") {
     const data = kind === "class_results" ? await resultsData(user, input) : await reviewData(user, input);
@@ -489,6 +507,98 @@ export async function translateDeck(user, id, { language }) {
     { $set: { slides, language, title: str(out?.title, 140) || deck.title } },
     { new: true }
   ).lean();
+  return { deck: serialize(updated) };
+}
+
+// ---------------------------------------------------------------------------
+// Pictures on slides
+// ---------------------------------------------------------------------------
+
+/** A short-lived signature so the browser uploads a picture straight to Cloudinary. */
+export async function imageUploadSignature(user) {
+  const cfg = await cloudinaryConfig();
+  if (!cfg) throw AppError.badRequest("Picture uploads aren't set up on EduFlow yet. Contact support.", "UPLOADS_NOT_CONFIGURED");
+  const params = {
+    allowed_formats: "png,jpg,jpeg,webp",
+    folder: `${cfg.folder}/slides/${user.tenantId}`,
+    timestamp: Math.floor(Date.now() / 1000),
+    // Big enough for a projector, small enough for a quick PowerPoint
+    transformation: "c_limit,w_1600,h_1600",
+  };
+  return { uploadUrl: `https://api.cloudinary.com/v1_1/${cfg.cloudName}/image/upload`, fields: { ...params, api_key: cfg.apiKey, signature: sign(params, cfg.apiSecret) } };
+}
+
+// Test mode: a public sample picture instead of calling an image model and Cloudinary
+const FAKE_IMAGE = "https://res.cloudinary.com/demo/image/upload/sample.jpg";
+
+/** Draws one picture and stores it on Cloudinary; logs it as AI use either way. Returns the URL. */
+async function drawPicture(user, cfg, describe) {
+  const question = `[image] ${describe}`.slice(0, 500);
+  try {
+    let url;
+    if (cfg.imageModel === "fake-image") url = FAKE_IMAGE;
+    else {
+      const img = await makeImage(cfg, `A clean, friendly illustration for a school presentation slide (India), no text or letters in the image: ${describe}`);
+      if (!img) throw new AppError(422, "The AI couldn't make a picture for that (it may have been blocked). Try describing it differently.", "AI_IMAGE_EMPTY");
+      url = await uploadDataUri(`data:${img.mimeType};base64,${img.data}`, `slides/${user.tenantId}`);
+    }
+    await log(user, cfg, { kind: "image", question, usage: { input: 0, output: 0 }, ok: true, units: UNITS.image });
+    return url;
+  } catch (err) {
+    await log(user, cfg, { kind: "image", question, usage: { input: 0, output: 0 }, ok: false, units: UNITS.image });
+    if (err instanceof AppError) throw err;
+    throw geminiError(err);
+  }
+}
+
+/**
+ * Puts pictures on `want` slides of a new topic deck (in place). Uses the slides the AI chose as
+ * "image" first, then turns evenly spread bullet slides into picture slides (they keep their
+ * words). Pictures are drawn together; a slide whose picture fails goes back to bullets.
+ */
+async function addPictures(user, cfg, slides, raw, want, topic) {
+  const last = slides.length - 1;
+  const inner = (i) => i > 0 && i < last;
+  const chosen = slides.map((x, i) => i).filter((i) => inner(i) && slides[i].layout === "image");
+  if (chosen.length < want) {
+    const spare = slides.map((x, i) => i).filter((i) => inner(i) && slides[i].layout === "bullets" && slides[i].bullets?.length);
+    // Evenly through the deck: the middle of each equal share of the spare slides
+    const need = Math.min(want - chosen.length, spare.length);
+    for (let k = 0; k < need; k++) chosen.push(spare[Math.floor(((k + 0.5) * spare.length) / need)]);
+  }
+  const picks = [...new Set(chosen)].sort((a, b) => a - b).slice(0, want);
+  const others = slides.map((x, i) => i).filter((i) => slides[i].layout === "image" && !picks.includes(i));
+  for (const i of others) slides[i] = { ...slides[i], layout: "bullets" };
+  await Promise.all(
+    picks.map(async (i) => {
+      const s = slides[i];
+      const describe = str(raw[i]?.imagePrompt, 300) || `${s.title} (${topic})${s.bullets?.length ? `: ${s.bullets.slice(0, 3).join(", ")}` : ""}`;
+      const bullets = s.bullets?.length ? s.bullets.slice(0, 4) : [...(s.left?.bullets ?? []), ...(s.right?.bullets ?? [])].slice(0, 4);
+      try {
+        const url = await drawPicture(user, cfg, describe);
+        slides[i] = cleanSlide({ ...s, layout: "image", bullets, image: { url, alt: describe.slice(0, 160), source: "ai" } });
+      } catch {
+        slides[i] = { ...s, layout: s.layout === "image" ? "bullets" : s.layout, ...(s.layout === "image" ? { bullets } : {}) };
+      }
+    })
+  );
+}
+
+/** Makes a picture for a slide with the AI image model and puts it on the slide. */
+export async function generateSlideImage(user, id, index, { prompt }) {
+  const deck = await AiDeck.findOne({ _id: id, tenantId: user.tenantId, userId: user.id }).lean();
+  if (!deck) throw AppError.notFound("Presentation not found", "AI_DECK_NOT_FOUND");
+  const slide = deck.slides[index];
+  if (!slide) throw AppError.notFound("Slide not found", "AI_DECK_NO_SLIDE");
+  const settings = await aiConfig();
+  if (!imagesReady(settings)) throw AppError.badRequest("AI pictures aren't turned on yet. Upload a picture instead, or ask EduFlow support.", "AI_IMAGES_OFF");
+  const cfg = await assertReady(user, UNITS.image);
+  const describe = prompt?.trim() || `${slide.title}${slide.bullets?.length ? `: ${slide.bullets.slice(0, 3).join(", ")}` : ""}`;
+  const url = await drawPicture(user, cfg, describe);
+  // A text slide becomes a picture slide (keeping its words)
+  const layout = ["bullets", "two_column", "section", "quote"].includes(slide.layout) ? "image" : slide.layout;
+  const next = cleanSlide({ ...slide, layout, image: { url, alt: describe.slice(0, 160), source: "ai" } });
+  const updated = await AiDeck.findOneAndUpdate({ _id: id, tenantId: user.tenantId, userId: user.id }, { $set: { [`slides.${index}`]: next } }, { new: true }).lean();
   return { deck: serialize(updated) };
 }
 

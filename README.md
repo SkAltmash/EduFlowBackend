@@ -574,6 +574,19 @@ Results are capped at 40 rows and carry `/app/...` links that the app renders as
 Every question and draft is logged in `AiQuery` (kept 180 days) and counts toward the school's monthly
 quota; each member is also limited to 30 per 10 minutes.
 
+### Help, remarks, pictures, costs
+
+- **`how_to` tool** ([ai.help.js](src/modules/ai/ai.help.js)): short step-by-step guides that name the real pages and buttons, filtered to what the member's role can do. The assistant uses it for every "how do I…" question.
+- **`POST /api/ai/remarks` `{ examId, language, tone: warm|formal|brief }`** ([ai.remarks.js](src/modules/ai/ai.remarks.js)): one report-card remark per student with marks, from their subjects and attendance that month. For the class teacher or an admin (like saving remarks); about one question per 10 students. Nothing is saved: the marks sheet saves them.
+- **Pictures on slides** (`layout: image`, `image: { url, alt, source }`): `POST /api/ai/decks/images/signature` gives a short-lived Cloudinary signature for the browser to upload (folder `<folder>/slides/<tenantId>`); `POST /api/ai/decks/:id/slides/:index/image` `{ prompt }` draws one and puts it on the slide (2 questions). Only `https://res.cloudinary.com/...` pictures are kept on a slide.
+- **AI pictures** (`makeImage` in [gemini.js](src/modules/ai/gemini.js)), set in Console → Settings → AI → *AI pictures on slides*:
+  - **Cloudflare Workers AI** (default, free up to 10,000 neurons a day, roughly 150 pictures): FLUX.1 schnell (`@cf/black-forest-labs/flux-1-schnell`). Needs the Cloudflare account ID and an API token with *Workers AI* Read and Edit (stored encrypted).
+  - **Gemini image models** (`gemini-2.5-flash-image`, `gemini-3.1-flash-image`): `generateContent` with `responseModalities: ["IMAGE"]`, using the Gemini key. Imagen ids are refused: `generateImages` works only on Vertex AI.
+  - *Test a picture* in the console draws one with the saved settings.
+  - New topic decks get 2 AI pictures (6 slides or fewer) or 3, drawn while the deck is written (`pictures: false` turns this off). The AI's own `image` slides are used first, then evenly spread bullet slides become picture slides; a failed picture leaves the slide as text.
+- **Retries**: Gemini 429/500/502/503/504 errors are retried twice (after 1.5 s and 4 s) before the member sees an error; the real error is logged.
+- **Costs and limits**: Console → Settings → AI assistant → *Pricing for cost estimates* (US$ per 1M input/output tokens, ₹ per US$) and US$ per picture. Usage shows the estimated ₹ cost per school and per question. A school can have its own monthly limit (`PATCH /api/admin/schools/:id/limits` `{ aiQuota }`, `null` = the platform's).
+
 ### Presentations ([ai.slides.js](src/modules/ai/ai.slides.js))
 
 AI presentations, saved per member (`AiDeck`), edited in the app and downloaded as PowerPoint or PDF:

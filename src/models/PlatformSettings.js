@@ -32,6 +32,17 @@ const platformSettingsSchema = new mongoose.Schema(
       monthlyQuota: { type: Number, min: 0, default: 300 },
       // How much the model thinks before answering: less is faster and cheaper
       thinking: { type: String, enum: ["minimal", "low", "default"], default: "low" },
+      // For the console's cost estimates (Google's price per 1M tokens, in US$) and the rate to ₹
+      priceInputUsd: { type: Number, min: 0, default: 0.75 },
+      priceOutputUsd: { type: Number, min: 0, default: 3.75 },
+      usdToInr: { type: Number, min: 1, default: 88 },
+      // AI images on slides: who makes them, the model id (empty: off) and the price per image (US$).
+      // Cloudflare Workers AI (FLUX, free daily allowance) needs the account id and an API token (encrypted).
+      imageProvider: { type: String, enum: ["gemini", "cloudflare"], default: "cloudflare" },
+      imageModel: { type: String, trim: true, maxlength: 80, default: "" },
+      cfAccountId: { type: String, trim: true, maxlength: 64, default: "" },
+      cfTokenEnc: { type: String, default: "" },
+      imagePriceUsd: { type: Number, min: 0, default: 0.04 },
     },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   },

@@ -20,9 +20,17 @@ export async function aiConfig() {
   if (cache && Date.now() - cachedAt < 60_000) return cache;
   const a = (await PlatformSettings.findOne({ key: "platform" }, { ai: 1 }).lean())?.ai ?? {};
   const apiKey = decrypt(a.apiKeyEnc) || (FAKE ? "fake" : null);
-  cache = { enabled: Boolean(a.enabled && apiKey), apiKey, model: a.model || DEFAULT_MODEL, monthlyQuota: a.monthlyQuota ?? 300, thinking: a.thinking || "low" };
+  cache = { enabled: Boolean(a.enabled && apiKey), apiKey, model: a.model || DEFAULT_MODEL, monthlyQuota: a.monthlyQuota ?? 300, thinking: a.thinking || "low", ...imageSettings(a), imagePriceUsd: a.imagePriceUsd ?? 0.04 };
+  if (!cache.imageModel && FAKE && apiKey === "fake") cache.imageModel = "fake-image";
   cachedAt = Date.now();
   return cache;
+}
+/** True when AI pictures can be made with these settings. */
+export const imagesReady = (c) => c.imageModel === "fake-image" || Boolean(c.imageModel && (c.imageProvider !== "cloudflare" || (c.cfAccountId && c.cfToken)));
+
+/** The image half of the AI settings: { imageProvider, imageModel, cfAccountId, cfToken }. */
+export function imageSettings(a) {
+  return { imageProvider: a.imageProvider || "cloudflare", imageModel: a.imageModel || "", cfAccountId: a.cfAccountId || "", cfToken: decrypt(a.cfTokenEnc) || null };
 }
 export const forgetAiConfig = () => {
   cache = null;
@@ -49,10 +57,28 @@ function withThinking(cfg, config, level = cfg.thinking) {
 const rejectsThinking = (err) => err instanceof ApiError && err.status === 400 && /think/i.test(err.message);
 
 /** generateContent with the thinking setting; retried once without it if the model doesn't support it. */
+// Google's "overloaded" and other passing errors: asked again after a short wait
+const TRANSIENT = new Set([429, 500, 502, 503, 504]);
+const RETRY_WAITS = [1500, 4000];
+
+/** Runs a Gemini request, retrying twice on a passing server error (not once it was stopped). */
+async function withRetry(run, signal) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await run();
+    } catch (err) {
+      const wait = RETRY_WAITS[attempt];
+      if (!(err instanceof ApiError && TRANSIENT.has(err.status)) || wait === undefined || signal?.aborted) throw err;
+      console.warn(`Gemini ${err.status} (${String(err.message).slice(0, 120)}); trying again in ${wait / 1000}s`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+}
+
 export async function generate(cfg, { config, ...req }, level) {
   const client = geminiClient(cfg.apiKey);
   try {
-    return await client.models.generateContent({ model: cfg.model, ...req, config: withThinking(cfg, config, level) });
+    return await withRetry(() => client.models.generateContent({ model: cfg.model, ...req, config: withThinking(cfg, config, level) }), config?.abortSignal);
   } catch (err) {
     if (!rejectsThinking(err) || noThinkingLevel.has(cfg.model)) throw err;
     noThinkingLevel.add(cfg.model);
@@ -65,7 +91,7 @@ export async function generate(cfg, { config, ...req }, level) {
 export async function generateStream(cfg, { config, ...req }, level) {
   const client = geminiClient(cfg.apiKey);
   try {
-    return await client.models.generateContentStream({ model: cfg.model, ...req, config: withThinking(cfg, config, level) });
+    return await withRetry(() => client.models.generateContentStream({ model: cfg.model, ...req, config: withThinking(cfg, config, level) }), config?.abortSignal);
   } catch (err) {
     if (!rejectsThinking(err) || noThinkingLevel.has(cfg.model)) throw err;
     noThinkingLevel.add(cfg.model);
@@ -79,6 +105,7 @@ export function geminiError(err) {
   if (err instanceof AppError) return err;
   if (err?.name === "AbortError") return new AppError(499, "Stopped.", "AI_ABORTED");
   if (err instanceof ApiError) {
+    console.error(`Gemini error ${err.status}: ${String(err.message).slice(0, 400)}`);
     if (err.status === 400 && /api key/i.test(err.message)) return new AppError(502, "The AI service rejected the API key. Ask EduFlow support to check it.", "AI_KEY_INVALID");
     if (err.status === 401 || err.status === 403) return new AppError(502, "The AI service rejected the API key. Ask EduFlow support to check it.", "AI_KEY_INVALID");
     if (err.status === 404) return new AppError(502, "The AI model set in the console doesn't exist. Ask EduFlow support to check it.", "AI_MODEL_INVALID");
@@ -87,6 +114,61 @@ export function geminiError(err) {
     return new AppError(502, `The AI service couldn't answer (${err.message.slice(0, 160)}).`, "AI_FAILED");
   }
   return new AppError(503, "Couldn't reach the AI service. Try again in a minute.", "AI_UNREACHABLE");
+}
+
+// Test mode: a 1×1 picture
+const FAKE_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
+
+export const CF_DEFAULT_IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
+
+/**
+ * Makes one picture with the console's image settings. Returns { data (base64), mimeType }, or
+ * null when the model answered without a picture (a blocked prompt).
+ * - Cloudflare Workers AI (FLUX schnell): free up to a daily allowance; square pictures.
+ * - Gemini image models ("gemini-…-image"): the picture comes back as inline data. (Imagen's
+ *   generateImages only works on Vertex AI, not with an AI Studio key, and is deprecated.)
+ */
+export async function makeImage(cfg, prompt, { aspectRatio = "4:3" } = {}) {
+  if (cfg.imageModel === "fake-image") return { data: FAKE_PNG, mimeType: "image/png" };
+  if (cfg.imageProvider === "cloudflare") return cloudflareImage(cfg, prompt);
+  if (/^imagen/i.test(cfg.imageModel)) throw AppError.badRequest("Imagen models need Vertex AI. In the console, use a Gemini image model such as gemini-2.5-flash-image.", "AI_IMAGE_MODEL");
+  try {
+    const r = await geminiClient(cfg.apiKey).models.generateContent({
+      model: cfg.imageModel,
+      contents: prompt,
+      config: { responseModalities: ["IMAGE"], imageConfig: { aspectRatio }, abortSignal: AbortSignal.timeout(90_000) },
+    });
+    const part = r.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data);
+    return part ? { data: part.inlineData.data, mimeType: part.inlineData.mimeType || "image/png" } : null;
+  } catch (err) {
+    throw geminiError(err);
+  }
+}
+
+async function cloudflareImage(cfg, prompt) {
+  if (!cfg.cfAccountId || !cfg.cfToken) throw AppError.badRequest("AI pictures need the Cloudflare account ID and API token (Console → Settings → AI).", "AI_IMAGES_OFF");
+  const model = cfg.imageModel?.startsWith("@cf/") ? cfg.imageModel : CF_DEFAULT_IMAGE_MODEL;
+  let res;
+  try {
+    res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(cfg.cfAccountId)}/ai/run/${model}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${cfg.cfToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: prompt.slice(0, 2000), steps: 4 }),
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch (err) {
+    if (err?.name === "TimeoutError") throw new AppError(504, "The picture took too long. Try again.", "AI_TIMEOUT");
+    throw new AppError(503, "Couldn't reach Cloudflare to make the picture. Try again in a minute.", "AI_UNREACHABLE");
+  }
+  const body = await res.json().catch(() => null);
+  const image = body?.result?.image;
+  if (res.ok && image) return { data: image, mimeType: "image/jpeg" };
+  const why = (body?.errors ?? []).map((e) => `${e.code ?? ""} ${e.message ?? ""}`).join("; ");
+  if (res.status === 401 || res.status === 403 || /auth/i.test(why)) throw new AppError(502, "Cloudflare refused the API token. Check the account ID and that the token has Workers AI permission.", "AI_IMAGE_AUTH");
+  if (res.status === 429 || /allocation|neurons|limit/i.test(why)) throw new AppError(429, "Today's free AI pictures are used up. Try again tomorrow, or upload a picture.", "AI_IMAGE_LIMIT");
+  if (res.status === 404 || /no such model|not found/i.test(why)) throw new AppError(502, "The Cloudflare image model set in the console doesn't exist.", "AI_IMAGE_MODEL");
+  if (res.ok || res.status === 400) return null; // blocked or empty
+  throw new AppError(502, `Cloudflare couldn't make the picture (${res.status}). Try again.`, "AI_IMAGE_FAILED");
 }
 
 /** A tiny request to check a key and model (Console → Save and check). */
@@ -131,6 +213,8 @@ function fakeTurn({ contents, config }) {
   const call = (name, args) => declared.includes(name) && { parts: [{ functionCall: { id: `fake-${Date.now()}`, name, args }, thoughtSignature: "fake-signature" }], usage };
   const fee = question.match(/(\d+)\s*(?:rs|rupees|₹)?\s*fees?\s+for\s+(.+?)\s*$/i);
   if (fee) return call("prepare_fee_payment", { student: fee[2], amountRupees: Number(fee[1]) }) || { parts: [{ text: "Fee tool not available for your role." }], usage };
+  const howTo = question.match(/^how (?:do i|to)\s+(.+)$/i);
+  if (howTo) return call("how_to", { topic: howTo[1] }) || { parts: [{ text: "Help not available." }], usage };
   const receipts = question.match(/receipts?\s+(?:for|of)\s+(.+?)\s*$/i);
   if (receipts) return call("student_receipts", { student: receipts[1] }) || { parts: [{ text: "Receipts not available for your role." }], usage };
   const whole = question.match(/class\s+(\w+?)(?:-(\w+))?\s+all\s+(present|absent)(?:\s+except\s+(.+))?$/i);
@@ -190,7 +274,7 @@ const fakeClient = {
         if (deck[1] === "OUTLINE") out = { title: `About ${input.topic}`, slides: Array.from({ length: input.slides }, (_, i) => ({ title: i === 0 ? input.topic : i === input.slides - 1 ? "Thank you" : `Part ${i}: ${input.topic}`, points: [`Point A ${i}`, `Point B ${i}`] })) };
         else if (deck[1] === "TOPIC") {
           const n = input.outline.slides.length;
-          out = { slides: input.outline.slides.map((s, i) => (i === 0 ? { layout: "title", title: s.title, notes: "Welcome everyone." } : i === n - 1 ? { layout: "closing", title: s.title, notes: "Thanks." } : i % 3 === 2 ? { layout: "two_column", title: s.title, left: { heading: "Before", bullets: ["One", "Two"] }, right: { heading: "After", bullets: ["Three", "Four"] }, notes: "Compare." } : { layout: "bullets", title: s.title, bullets: s.points.length ? s.points : ["Test point"], notes: `Talk about ${s.title}.` })) };
+          out = { slides: input.outline.slides.map((s, i) => (i === 0 ? { layout: "title", title: s.title, notes: "Welcome everyone." } : i === n - 1 ? { layout: "closing", title: s.title, notes: "Thanks." } : i === 1 ? { layout: "image", title: s.title, bullets: ["Picture point"], imagePrompt: `A picture about ${s.title}`, notes: "Look at this." } : i % 3 === 2 ? { layout: "two_column", title: s.title, left: { heading: "Before", bullets: ["One", "Two"] }, right: { heading: "After", bullets: ["Three", "Four"] }, notes: "Compare." } : { layout: "bullets", title: s.title, bullets: s.points.length ? s.points : ["Test point"], notes: `Talk about ${s.title}.` })) };
         } else if (deck[1] === "DATA") out = { title: "Test mode deck", subtitle: "Made from records", dataSlides: input.dataSlides.map((d) => ({ id: d.id, caption: `Test caption for ${d.id}.`, notes: `Notes for ${d.id}.` })), extraSlides: [{ layout: "bullets", title: "Highlights", bullets: ["Good attendance", "Fees on track"], notes: "Highlights." }, { layout: "closing", title: "Thank you" }] };
         else if (deck[1] === "NEW") out = { layout: "bullets", title: `New: ${input.instruction}`, bullets: ["First idea", "Second idea"], notes: "Added by AI." };
         else if (deck[1] === "TRANSLATE") {
@@ -199,6 +283,11 @@ const fakeClient = {
           out = { title: tr(input.title), items: input.items.map((it) => Object.fromEntries(Object.entries(it).map(([k, v]) => [k, k === "i" ? v : tr(v)]))) };
         } else out = { ...input, title: `Improved: ${input.title}`, caption: "A clearer caption.", notes: "Better notes." };
         return asResponse([{ text: JSON.stringify(out) }], { promptTokenCount: 500, candidatesTokenCount: 400 });
+      }
+      // Report-card remarks: one per student
+      if (req.config?.responseMimeType === "application/json" && String(req.contents).startsWith("REMARKS_JSON:")) {
+        const list = JSON.parse(String(req.contents).slice("REMARKS_JSON:".length));
+        return asResponse([{ text: JSON.stringify(list.map((st) => ({ id: st.id, remark: `${st.firstName} did well${st.subjects[0] ? ` in ${st.subjects[0].subject}` : ""}. Keep it up! (test)` }))) }], { promptTokenCount: 300, candidatesTokenCount: 20 * list.length });
       }
       // Daily summary: an empty AI answer, so the summary is written from the numbers
       if (req.config?.responseMimeType === "application/json" && String(req.contents).startsWith("SUMMARY_FACTS:")) {

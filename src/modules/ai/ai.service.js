@@ -14,7 +14,7 @@ import WhatsAppConfig from "../../models/WhatsAppConfig.js";
 import User from "../../models/User.js";
 import AppError from "../../utils/AppError.js";
 import { getAccess } from "../platform/subscription.js";
-import { aiConfig, generate, generateStream, geminiError } from "./gemini.js";
+import { aiConfig, generate, generateStream, geminiError, imagesReady } from "./gemini.js";
 import { indiaToday, toolsFor } from "./ai.tools.js";
 import { ACTION_TOOLS } from "./ai.actions.js";
 import { leaderboard } from "../performance/performance.service.js";
@@ -37,19 +37,24 @@ export async function usedThisMonth(tenantId) {
 
 /** What the app shows: whether the assistant can be used, and why not. */
 export async function status(user) {
-  const [cfg, access, settings, used] = await Promise.all([
+  const [cfg, access, settings, used, tenant] = await Promise.all([
     aiConfig(),
     getAccess(user.tenantId),
     SchoolSettings.findOne({ tenantId: user.tenantId }, { ai: 1 }).populate("ai.enabledBy", "name").lean(),
     usedThisMonth(user.tenantId),
+    Tenant.findById(user.tenantId, { aiQuotaOverride: 1 }).lean(),
   ]);
   const ai = settings?.ai ?? {};
-  const state = !cfg.enabled ? "unavailable" : !access.features.aiAssistant && !user.isImpersonating ? "not_in_plan" : !ai.enabled ? "off" : used >= cfg.monthlyQuota ? "quota" : "ready";
+  // This school's monthly questions: its own limit if the console set one
+  const quota = tenant?.aiQuotaOverride ?? cfg.monthlyQuota;
+  const state = !cfg.enabled ? "unavailable" : !access.features.aiAssistant && !user.isImpersonating ? "not_in_plan" : !ai.enabled ? "off" : used >= quota ? "quota" : "ready";
   return {
     state,
     canManage: MANAGERS.includes(user.role),
+    // AI pictures on slides (an image model is set in the console)
+    images: imagesReady(cfg),
     enabledBy: ai.enabled ? { name: ai.enabledBy?.name ?? "", at: ai.enabledAt ?? null } : null,
-    usage: { used, quota: cfg.monthlyQuota, month: monthOf() },
+    usage: { used, quota, month: monthOf() },
   };
 }
 
@@ -141,7 +146,7 @@ How to answer:
 - Answer only from the tools' results. Never guess numbers, names or dates; if the tools don't have it, say so plainly.
 - Call tools as needed, but as few rounds as possible: when you need several lookups that don't depend on each other, ask for them together in one turn. Tools that take a student's name (student_receipts and the prepare_* tools) find the student themselves, so don't call find_students first for those. Use list_classes or find_students only when a class or student is unclear. If a tool says the user can't see something, tell them kindly.
 - You can prepare these changes with the prepare_* tools: record a fee payment received, mark one student's attendance for a day, mark a whole class's attendance in one go ("5-A all present except Riya and Aman absent": use prepare_class_attendance with exceptions), add a staff note about a student. These tools never change anything themselves: the app shows the user a dialog to pick the right student (when several match) and to confirm. So after calling one, say in one short sentence that it's ready: they can confirm in the dialog or with Review on the card below (or by replying "yes"); never say it's done or recorded. Ask first if something essential is missing (e.g. the amount). Only prepare what the user clearly asked for.
-- Anything else (adding or deleting students, fee plans, discounts, sending messages) you can't do: say where in EduFlow they can do it (Students, Attendance, Fees, Tests, Notices, Homework, Settings).
+- Anything else (adding or deleting students, fee plans, discounts, sending messages) you can't do: call how_to and give its steps as a short numbered list with the page link. For any "how do I…" question, use how_to; never invent menu names.
 - Be brief and practical: one or two sentences with the answer first (totals, counts), then the details.
 - When the answer lists several students (or classes, tests, payments), show them as a markdown table: first column the student's name as a link, then class and the numbers that matter (e.g. Balance, Overdue, Attendance %). Include every row the tool returned (the app shows a short preview and an expandable full table); if the tool says there are more than it returned, say how many.
 - Keep table cells short: plain numbers and amounts, no sentences.
@@ -307,7 +312,7 @@ export async function chat(user, { question, chatId, language }, send, signal, o
     console.log(`AI chat: ${(durationMs / 1000).toFixed(1)}s, ${timing.rounds} round(s), model ${(timing.model / 1000).toFixed(1)}s, lookups ${(timing.tools / 1000).toFixed(1)}s`);
     await log(user, cfg, { kind: "chat", question, tools: used, usage, ok: true, durationMs });
     send("chat", await saveTurn(user, thread, question, answer, used, actions, followups));
-    send("done", { usage: { used: await usedThisMonth(user.tenantId), quota: cfg.monthlyQuota } });
+    send("done", { usage: (await status(user)).usage });
   } catch (err) {
     const e = geminiError(err);
     if (e.code !== "AI_ABORTED") console.error("AI chat failed:", err?.message ?? err);

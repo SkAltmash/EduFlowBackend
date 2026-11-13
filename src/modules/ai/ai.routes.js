@@ -10,6 +10,7 @@ import * as ai from "./ai.service.js";
 import { cancelAction, confirmAction, getAction } from "./ai.actions.js";
 import { dailySummary } from "./ai.summary.js";
 import * as slides from "./ai.slides.js";
+import { writeRemarks } from "./ai.remarks.js";
 
 const router = Router();
 const manage = authorize(ROLES.OWNER, ROLES.ADMIN);
@@ -97,6 +98,7 @@ const deckSchema = z.discriminatedUnion("kind", [
     audience: z.string().trim().max(120).optional().default(""),
     language: lang,
     theme: z.enum(slides.DECK_THEMES).optional(),
+    pictures: z.boolean().optional(),
     outline: z.object({
       title: z.string().trim().max(140),
       slides: z.array(z.object({ title: z.string().trim().min(1).max(140), points: z.array(z.string().max(120)).max(4).optional().default([]) })).min(2).max(15),
@@ -121,6 +123,15 @@ router.patch("/decks/:deckId", validateBody(updateDeckSchema), async (req, res) 
 router.delete("/decks/:deckId", async (req, res) => res.json(await slides.deleteDeck(req.user, req.params.deckId)));
 router.post("/decks/:deckId/slides", validateBody(z.object({ after: z.coerce.number().int().min(0).max(19), instruction: z.string().trim().min(3, "Say what the slide should be").max(300) })), async (req, res) =>
   res.status(201).json(await slides.insertSlide(req.user, req.params.deckId, req.body))
+);
+router.post("/decks/images/signature", async (req, res) => res.json(await slides.imageUploadSignature(req.user)));
+router.post("/decks/:deckId/slides/:index/image", validateBody(z.object({ prompt: z.string().trim().max(300).optional().default("") })), async (req, res) => {
+  const index = Number(req.params.index);
+  if (!Number.isInteger(index) || index < 0 || index >= 20) throw AppError.badRequest("Invalid slide", "INVALID_ID");
+  res.json(await slides.generateSlideImage(req.user, req.params.deckId, index, req.body));
+});
+router.post("/remarks", authorize(ROLES.OWNER, ROLES.ADMIN, ROLES.TEACHER), validateBody(z.object({ examId: objectId, language: z.enum(["en", "hi", "mr"]).optional().default("en"), tone: z.enum(["warm", "formal", "brief"]).optional().default("warm") })), async (req, res) =>
+  res.json(await writeRemarks(req.user, req.body))
 );
 router.post("/decks/:deckId/translate", validateBody(z.object({ language: z.enum(["en", "hi", "mr"]) })), async (req, res) => res.json(await slides.translateDeck(req.user, req.params.deckId, req.body)));
 router.post("/decks/:deckId/slides/:index/regenerate", validateBody(z.object({ instruction: z.string().trim().max(300).optional().default("") })), async (req, res) => {

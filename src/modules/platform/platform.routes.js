@@ -30,6 +30,8 @@ const paymentSchema = z.object({
 });
 const limitsSchema = z.object({
   studentLimit: z.number().int().min(0).max(1_000_000).nullable().optional(),
+  // AI questions a month for this school; null = the platform's default
+  aiQuota: z.number().int().min(0).max(100_000).nullable().optional(),
   features: z.partialRecord(z.enum(PLAN_FEATURES), z.boolean().nullable()).optional(),
 });
 const planSchema = z.object({
@@ -85,6 +87,15 @@ const settingsSchema = z
       model: z.string().trim().min(1, "Choose a model").max(80).regex(/^[a-z0-9.-]+$/, "Model ids look like gemini-3.8-flash"),
       monthlyQuota: z.coerce.number().int().min(0).max(100000),
       thinking: z.enum(["minimal", "low", "default"]).default("low"),
+      priceInputUsd: z.coerce.number().min(0).max(1000).optional(),
+      priceOutputUsd: z.coerce.number().min(0).max(1000).optional(),
+      usdToInr: z.coerce.number().min(1).max(1000).optional(),
+      imageProvider: z.enum(["gemini", "cloudflare"]).optional(),
+      imageModel: z.string().trim().max(80).regex(/^[a-z0-9@/._-]*$/, "Model ids look like @cf/black-forest-labs/flux-1-schnell or gemini-2.5-flash-image").refine((v) => !/^imagen/.test(v), "Imagen models need Vertex AI; use a Gemini image model such as gemini-2.5-flash-image").optional(),
+      cfAccountId: z.string().trim().max(64).regex(/^[a-f0-9]*$/i, "The account ID is 32 letters and digits (Cloudflare dashboard → Account home)").optional(),
+      // Empty = keep the saved token
+      cfToken: z.string().trim().max(300).regex(/^\S*$/, "The API token can't contain spaces").default(""),
+      imagePriceUsd: z.coerce.number().min(0).max(10).optional(),
     }),
   })
   .partial();
@@ -137,6 +148,7 @@ r.post("/settings/otp/test/verify", validateBody(z.object({ challengeId: z.strin
   res.json(await platform.testOtpVerify(ctx(req), req.body))
 );
 r.post("/settings/ai/test", async (req, res) => res.json(await platform.testAi(ctx(req))));
+r.post("/settings/ai/test-image", async (req, res) => res.json(await platform.testAiImage(ctx(req))));
 r.get("/settings/ai/usage", async (req, res) => res.json(await platform.aiUsage()));
 r.post("/settings/cloudinary/test", async (req, res) => res.json(await platform.testCloudinary()));
 r.put("/settings", validateBody(settingsSchema), async (req, res) => res.json(await platform.saveSettings(ctx(req), req.body)));

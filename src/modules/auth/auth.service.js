@@ -46,6 +46,8 @@ export function serializeUser(user) {
     name: user.name,
     email: user.email,
     phone: user.phone || "",
+    // Checked with a one-time code (sign-up or My account)
+    phoneVerified: Boolean(user.phone && user.phoneVerifiedAt),
     isActive: user.isActive,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,

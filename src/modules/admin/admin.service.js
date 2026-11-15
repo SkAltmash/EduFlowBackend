@@ -79,6 +79,8 @@ function serializeMember(membership) {
     userId: String(membership.userId._id),
     name: membership.userId.name,
     email: membership.userId.email,
+    phone: membership.userId.phone || "",
+    phoneVerified: Boolean(membership.userId.phone && membership.userId.phoneVerifiedAt),
     isActive: membership.userId.isActive,
     role: membership.role,
     joinedAt: membership.createdAt,
@@ -87,7 +89,7 @@ function serializeMember(membership) {
 
 async function getMembers(tenantId) {
   const memberships = await Membership.find({ tenantId })
-    .populate("userId", "name email isActive")
+    .populate("userId", "name email phone phoneVerifiedAt isActive")
     .sort({ createdAt: 1 })
     .lean();
   return memberships.filter((m) => m.userId).map(serializeMember);
@@ -322,7 +324,9 @@ export async function listUsers({ page, limit, status, search }) {
   const filter = { ...statusFilter(status) };
   if (search) {
     const re = new RegExp(escapeRegex(search), "i");
-    filter.$or = [{ name: re }, { email: re }];
+    // A phone search also matches without the +91 or spaces
+    const digits = search.replace(/\D/g, "");
+    filter.$or = [{ name: re }, { email: re }, ...(digits.length >= 4 ? [{ phone: new RegExp(escapeRegex(digits.slice(-10))) }] : [])];
   }
 
   const [users, total] = await Promise.all([

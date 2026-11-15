@@ -216,7 +216,7 @@ export async function schoolDetail(id) {
 
   const [settings, memberships, studentsActive, studentsTotal, attendance7, fees, whatsapp30, tests, activeDays, payments, auditLog] = await Promise.all([
     SchoolSettings.findOne({ tenantId: tid }, { profile: 1 }).lean(),
-    Membership.find({ tenantId: tid }).populate("userId", "name email isActive").lean(),
+    Membership.find({ tenantId: tid }).populate("userId", "name email phone phoneVerifiedAt isActive").lean(),
     Student.countDocuments({ tenantId: tid, status: "active" }),
     Student.countDocuments({ tenantId: tid }),
     Attendance.countDocuments({ tenantId: tid, date: { $gte: since7 } }),
@@ -237,7 +237,7 @@ export async function schoolDetail(id) {
     }),
     members: memberships
       .filter((m) => m.userId)
-      .map((m) => ({ userId: String(m.userId._id), name: m.userId.name, email: m.userId.email, isActive: m.userId.isActive, role: m.role, joinedAt: m.createdAt })),
+      .map((m) => ({ userId: String(m.userId._id), name: m.userId.name, email: m.userId.email, phone: m.userId.phone || "", phoneVerified: Boolean(m.userId.phone && m.userId.phoneVerifiedAt), isActive: m.userId.isActive, role: m.role, joinedAt: m.createdAt })),
     usage: {
       studentsActive,
       studentsTotal,
@@ -470,7 +470,7 @@ export async function search(q) {
   const re = new RegExp(escapeRegex(q.trim()), "i");
   const [tenants, users, profiles] = await Promise.all([
     Tenant.find({ $or: [{ name: re }, { slug: re }] }, { name: 1, slug: 1 }).limit(8).lean(),
-    User.find({ $or: [{ name: re }, { email: re }] }, { name: 1, email: 1 }).limit(8).lean(),
+    User.find({ $or: [{ name: re }, { email: re }, ...(q.replace(/\D/g, "").length >= 4 ? [{ phone: new RegExp(escapeRegex(q.replace(/\D/g, "").slice(-10))) }] : [])] }, { name: 1, email: 1, phone: 1 }).limit(8).lean(),
     SchoolSettings.find({ $or: [{ "profile.phone": re }, { "profile.email": re }, { "profile.city": re }] }, { tenantId: 1, profile: 1 }).limit(8).lean(),
   ]);
   const extra = profiles.length ? await Tenant.find({ _id: { $in: profiles.map((p) => p.tenantId) } }, { name: 1, slug: 1 }).lean() : [];
@@ -478,7 +478,7 @@ export async function search(q) {
   const memberships = await Membership.find({ userId: { $in: users.map((u) => u._id) } }).populate("tenantId", "name").lean();
   return {
     schools,
-    users: users.map((u) => ({ id: String(u._id), name: u.name, email: u.email, schools: memberships.filter((m) => String(m.userId) === String(u._id) && m.tenantId).map((m) => ({ id: String(m.tenantId._id), name: m.tenantId.name, role: m.role })) })),
+    users: users.map((u) => ({ id: String(u._id), name: u.name, email: u.email, phone: u.phone || "", schools: memberships.filter((m) => String(m.userId) === String(u._id) && m.tenantId).map((m) => ({ id: String(m.tenantId._id), name: m.tenantId.name, role: m.role })) })),
   };
 }
 

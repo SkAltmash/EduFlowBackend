@@ -15,7 +15,8 @@ import { checkoutSignatureOk, createOrder, razorpayConfig, webhookSignatureOk } 
 /** Plans on offer (for the pricing pages; no per-plan school counts). */
 export async function offeredPlans() {
   const { plans } = await listPlans();
-  return plans.filter((p) => !p.archived).map(({ schools: _s, isDefault: _d, archived: _a, ...p }) => p);
+  // "trial": the plan new schools try for free (the console's default plan)
+  return plans.filter((p) => !p.archived).map(({ schools: _s, isDefault, archived: _a, ...p }) => ({ ...p, trial: Boolean(isDefault) }));
 }
 
 /** Plan & billing in the app: the subscription, plans, whether online payment is on, and past payments. */

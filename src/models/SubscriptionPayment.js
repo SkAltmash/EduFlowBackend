@@ -7,7 +7,7 @@ const subscriptionPaymentSchema = new mongoose.Schema(
     planId: { type: mongoose.Schema.Types.ObjectId, ref: "PlatformPlan" },
     planName: String,
     amount: { type: Number, required: true, min: 0 },
-    method: { type: String, enum: ["upi", "bank", "cash", "cheque", "card", "other"], default: "upi" },
+    method: { type: String, enum: ["upi", "bank", "cash", "cheque", "card", "razorpay", "other"], default: "upi" },
     reference: { type: String, trim: true, maxlength: 100, default: "" },
     cycle: { type: String, enum: ["monthly", "yearly"], default: "monthly" },
     periods: { type: Number, min: 1, max: 36, default: 1 },

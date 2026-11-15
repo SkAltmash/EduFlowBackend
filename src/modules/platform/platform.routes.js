@@ -41,6 +41,8 @@ const planSchema = z.object({
   priceYearly: money,
   studentLimit: z.number().int().min(0).max(1_000_000),
   features: z.partialRecord(z.enum(PLAN_FEATURES), z.boolean()).default({}),
+  popular: z.boolean().default(false),
+  highlights: z.array(z.string().trim().min(1).max(100)).max(6).default([]),
   isDefault: z.boolean().default(false),
   archived: z.boolean().default(false),
   order: z.number().int().default(0),
@@ -66,6 +68,13 @@ const settingsSchema = z
   .object({
     supportWhatsapp: z.string().trim().transform((v) => v.replace(/\D/g, "")).pipe(z.union([z.literal(""), z.string().min(10, "Enter the number with country code, e.g. 919876543210").max(15)])),
     supportEmail: z.union([z.literal(""), email]),
+    razorpay: z.object({
+      enabled: z.boolean(),
+      keyId: z.string().trim().max(60).regex(/^(rzp_(test|live)_[A-Za-z0-9]+)?$/, "The key id looks like rzp_live_… or rzp_test_…"),
+      // Empty = keep the saved secret
+      keySecret: z.string().trim().max(200).regex(/^\S*$/, "The key secret can't contain spaces").default(""),
+      webhookSecret: z.string().trim().max(200).regex(/^\S*$/, "The webhook secret can't contain spaces").default(""),
+    }),
     cloudinary: z.object({
       cloudName: z.string().trim().max(100).regex(/^[a-z0-9_-]*$/i, "Cloud name has only letters, digits, - and _"),
       apiKey: z.string().trim().max(100).regex(/^\d*$/, "The API key is a number"),

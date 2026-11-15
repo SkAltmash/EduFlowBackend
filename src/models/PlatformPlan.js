@@ -16,6 +16,10 @@ const platformPlanSchema = new mongoose.Schema(
     priceYearly: { type: Number, min: 0, default: 0 },
     studentLimit: { type: Number, min: 0, default: 0 },
     features: { type: Map, of: Boolean, default: {} },
+    // Shown with a "Most popular" badge on the pricing pages
+    popular: { type: Boolean, default: false },
+    // Why to choose this plan: short selling points shown above the feature list
+    highlights: { type: [String], default: [] },
     // The plan new schools start their trial on
     isDefault: { type: Boolean, default: false },
     archived: { type: Boolean, default: false },

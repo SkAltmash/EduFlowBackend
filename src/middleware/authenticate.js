@@ -67,7 +67,9 @@ export async function authenticate(req, res, next) {
     // Expired or suspended: everything stays readable, nothing can change (own account excepted)
     if (!READ_METHODS.has(req.method) && !req.baseUrl.startsWith("/api/auth")) {
       const access = await getAccess(payload.tenantId);
-      if (access.readOnly) {
+      // A school whose plan has ended can still pay to renew it
+      const renewing = access.status === "expired" && req.baseUrl.startsWith("/api/billing");
+      if (access.readOnly && !renewing) {
         throw new AppError(
           402,
           access.status === "suspended"

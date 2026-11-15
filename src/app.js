@@ -26,6 +26,7 @@ import timetableRouter from "./modules/classroom/timetable.js";
 import syllabusRouter from "./modules/classroom/syllabus.js";
 import aiRouter from "./modules/ai/ai.routes.js";
 import { tenantStatusRouter } from "./modules/platform/platform.routes.js";
+import { billingRouter, billingWebhookRouter, publicRouter } from "./modules/billing/billing.routes.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 
 const app = express();
@@ -60,6 +61,7 @@ app.use(
 app.use("/api/students/import", express.json({ limit: "2mb" }));
 // Meta's webhook signature is computed over the exact bytes, so keep this body raw
 app.use("/api/whatsapp/webhook", express.raw({ type: "application/json", limit: "1mb" }));
+app.use("/api/billing/webhook", express.raw({ type: "application/json", limit: "1mb" }));
 app.use(express.json({ limit: "100kb" }));
 app.use(cookieParser());
 
@@ -69,6 +71,9 @@ app.get("/", (req, res) => {
 
 app.use("/api/health", healthRouter);
 app.use("/api/auth", authRouter);
+app.use("/api/public", publicRouter);
+app.use("/api/billing/webhook", billingWebhookRouter);
+app.use("/api/billing", billingRouter);
 app.use("/api/tenant", tenantStatusRouter);
 app.use("/api/tenant", tenantRouter);
 app.use("/api/admin", adminRouter);

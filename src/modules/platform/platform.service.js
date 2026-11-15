@@ -28,6 +28,7 @@ import { checkUploadPermission, forgetCloudinaryConfig, pingCloudinary } from ".
 import { CF_DEFAULT_IMAGE_MODEL, DEFAULT_MODEL, forgetAiConfig, imageSettings, makeImage, pingGemini } from "../ai/gemini.js";
 import AiQuery from "../../models/AiQuery.js";
 import { forgetOtpConfig, normalizePhone, otpConfig, startChallenge, verifyChallenge } from "../auth/otp.js";
+import { forgetRazorpayConfig, pingRazorpay } from "../billing/razorpay.js";
 
 const DAY_MS = 86_400_000;
 const oid = (id) => new mongoose.Types.ObjectId(String(id));
@@ -294,19 +295,28 @@ const addMonths = (date, n) => {
 };
 
 /** Records a payment received outside the app and extends the paid period. */
+/**
+ * Records money a school paid and moves its subscription on: renewing the same plan continues
+ * from the end of the paid period; a new plan (or a lapsed one) starts today.
+ */
+export async function applyPayment(tenant, plan, { amount, method, reference = "", cycle, periods = 1, note = "", recordedBy, recordedByName }) {
+  const sub = tenant.subscription ?? {};
+  const samePlan = sub.planId && String(sub.planId) === String(plan._id);
+  const currentEnd = sub.status === "active" && samePlan && sub.currentPeriodEnd ? new Date(sub.currentPeriodEnd).getTime() : 0;
+  const periodStart = new Date(Math.max(Date.now(), currentEnd));
+  const periodEnd = addMonths(periodStart, (cycle === "yearly" ? 12 : 1) * periods);
+  const payment = await SubscriptionPayment.create({ tenantId: tenant._id, planId: plan._id, planName: plan.name, amount, method, reference, cycle, periods, periodStart, periodEnd, note, recordedBy, recordedByName });
+  tenant.subscription = { status: "active", planId: plan._id, cycle, trialEndsAt: sub.trialEndsAt, currentPeriodEnd: periodEnd, updatedAt: new Date() };
+  await tenant.save();
+  invalidateAccess(tenant._id);
+  return { payment, periodEnd };
+}
+
 export async function recordPayment(ctx, id, { planId, amount, method, reference, cycle, periods, note }) {
   const t = await findTenant(id);
   const plan = await PlatformPlan.findById(planId ?? t.subscription?.planId).lean();
   if (!plan) throw AppError.badRequest("Choose a plan", "INVALID_PLAN");
-  // A renewal continues from the end of the current paid period; otherwise from today
-  const currentEnd = t.subscription?.status === "active" && t.subscription.currentPeriodEnd ? new Date(t.subscription.currentPeriodEnd).getTime() : 0;
-  const periodStart = new Date(Math.max(Date.now(), currentEnd));
-  const periodEnd = addMonths(periodStart, (cycle === "yearly" ? 12 : 1) * periods);
-  const name = await adminName(ctx);
-  await SubscriptionPayment.create({ tenantId: t._id, planId: plan._id, planName: plan.name, amount, method, reference, cycle, periods, periodStart, periodEnd, note, recordedBy: ctx.adminId, recordedByName: name });
-  t.subscription = { status: "active", planId: plan._id, cycle, trialEndsAt: t.subscription?.trialEndsAt, currentPeriodEnd: periodEnd, updatedAt: new Date() };
-  await t.save();
-  invalidateAccess(id);
+  const { periodEnd } = await applyPayment(t, plan, { amount, method, reference, cycle, periods, note, recordedBy: ctx.adminId, recordedByName: await adminName(ctx) });
   await audit(ctx, { action: "subscription.payment", targetType: "tenant", targetId: t._id, tenantId: t._id, metadata: { amount, plan: plan.name, cycle, periods, until: periodEnd } });
   return schoolDetail(id);
 }
@@ -404,7 +414,7 @@ export async function deleteSchool(ctx, id, { confirm }) {
 // ---------------------------------------------------------------------------
 
 function serializePlan(p, schools = 0) {
-  return { id: String(p._id), name: p.name, description: p.description ?? "", priceMonthly: p.priceMonthly, priceYearly: p.priceYearly, studentLimit: p.studentLimit, features: Object.fromEntries(PLAN_FEATURES.map((f) => [f, planHas(asObject(p.features), f)])), isDefault: p.isDefault, archived: p.archived, order: p.order, schools };
+  return { id: String(p._id), name: p.name, description: p.description ?? "", priceMonthly: p.priceMonthly, priceYearly: p.priceYearly, studentLimit: p.studentLimit, popular: Boolean(p.popular), highlights: p.highlights ?? [], features: Object.fromEntries(PLAN_FEATURES.map((f) => [f, planHas(asObject(p.features), f)])), isDefault: p.isDefault, archived: p.archived, order: p.order, schools };
 }
 
 export async function listPlans() {
@@ -561,6 +571,13 @@ export async function getAdminSettings() {
   return {
     ...serializeSettings(s),
     cloudinary: { cloudName: c.cloudName ?? "", apiKey: c.apiKey ?? "", folder: c.folder || "eduflow", secretSet: Boolean(c.apiSecretEnc), secretReadable: Boolean(decrypt(c.apiSecretEnc)) },
+    razorpay: {
+      enabled: Boolean(s?.razorpay?.enabled),
+      keyId: s?.razorpay?.keyId ?? "",
+      secretSet: Boolean(s?.razorpay?.keySecretEnc),
+      secretReadable: Boolean(decrypt(s?.razorpay?.keySecretEnc)),
+      webhookSecretSet: Boolean(s?.razorpay?.webhookSecretEnc),
+    },
     otp: {
       enabled: Boolean(s?.otp?.enabled),
       keySet: Boolean(s?.otp?.apiKeyEnc),
@@ -588,8 +605,23 @@ export async function getAdminSettings() {
   };
 }
 
-export async function saveSettings(ctx, { cloudinary, otp, ai, ...data }) {
+export async function saveSettings(ctx, { cloudinary, otp, ai, razorpay, ...data }) {
   const set = { ...data, updatedBy: ctx.adminId };
+  if (razorpay) {
+    const current = (await PlatformSettings.findOne({ key: "platform" }, { razorpay: 1 }).lean())?.razorpay ?? {};
+    // Empty secrets keep the saved ones
+    const keySecret = razorpay.keySecret || decrypt(current.keySecretEnc);
+    if ((razorpay.keySecret || razorpay.webhookSecret) && !canEncrypt()) throw AppError.badRequest("Set DATA_ENCRYPTION_KEY on the server first; the secrets are stored encrypted.", "ENCRYPTION_UNAVAILABLE");
+    if (razorpay.enabled && (!razorpay.keyId || !keySecret)) throw AppError.badRequest("Enter the Razorpay key id and key secret before turning online payments on.", "RAZORPAY_INCOMPLETE");
+    // Check new keys with Razorpay before saving them
+    if (razorpay.keyId && keySecret && (razorpay.keySecret || razorpay.keyId !== current.keyId)) await pingRazorpay({ keyId: razorpay.keyId, keySecret });
+    set.razorpay = {
+      enabled: Boolean(razorpay.enabled),
+      keyId: razorpay.keyId,
+      keySecretEnc: razorpay.keySecret ? encrypt(razorpay.keySecret) : current.keySecretEnc || "",
+      webhookSecretEnc: razorpay.webhookSecret ? encrypt(razorpay.webhookSecret) : current.webhookSecretEnc || "",
+    };
+  }
   if (ai) {
     const current = (await PlatformSettings.findOne({ key: "platform" }, { ai: 1 }).lean())?.ai ?? {};
     // An empty key keeps the saved one
@@ -644,10 +676,11 @@ export async function saveSettings(ctx, { cloudinary, otp, ai, ...data }) {
   await PlatformSettings.updateOne({ key: "platform" }, { $set: set }, { upsert: true });
   settingsCache = null;
   forgetCloudinaryConfig();
+  forgetRazorpayConfig();
   forgetOtpConfig();
   forgetAiConfig();
   // Never log the secret
-  const logged = { ...data, ...(otp ? { otp: { enabled: otp.enabled, template: otp.template, requireOnRegister: otp.requireOnRegister, keyChanged: Boolean(otp.apiKey) } } : {}), ...(ai ? { ai: { enabled: ai.enabled, model: ai.model, monthlyQuota: ai.monthlyQuota, thinking: ai.thinking, keyChanged: Boolean(ai.apiKey) } } : {}), ...(cloudinary ? { cloudinary: { cloudName: cloudinary.cloudName, apiKey: cloudinary.apiKey, folder: cloudinary.folder, secretChanged: Boolean(cloudinary.apiSecret) } } : {}) };
+  const logged = { ...data, ...(otp ? { otp: { enabled: otp.enabled, template: otp.template, requireOnRegister: otp.requireOnRegister, keyChanged: Boolean(otp.apiKey) } } : {}), ...(ai ? { ai: { enabled: ai.enabled, model: ai.model, monthlyQuota: ai.monthlyQuota, thinking: ai.thinking, keyChanged: Boolean(ai.apiKey) } } : {}), ...(razorpay ? { razorpay: { enabled: razorpay.enabled, keyId: razorpay.keyId, keyChanged: Boolean(razorpay.keySecret), webhookChanged: Boolean(razorpay.webhookSecret) } } : {}), ...(cloudinary ? { cloudinary: { cloudName: cloudinary.cloudName, apiKey: cloudinary.apiKey, folder: cloudinary.folder, secretChanged: Boolean(cloudinary.apiSecret) } } : {}) };
   await audit(ctx, { action: "platform.settings_update", targetType: "platform", metadata: logged });
   return getAdminSettings();
 }

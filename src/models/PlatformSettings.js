@@ -7,6 +7,13 @@ const platformSettingsSchema = new mongoose.Schema(
     // Shown to schools on renew / upgrade links (digits with country code, e.g. 919876543210)
     supportWhatsapp: { type: String, trim: true, maxlength: 20, default: "" },
     supportEmail: { type: String, trim: true, lowercase: true, maxlength: 254, default: "" },
+    // Online payments for EduFlow plans through Razorpay. The key secret and webhook secret are stored encrypted.
+    razorpay: {
+      enabled: { type: Boolean, default: false },
+      keyId: { type: String, trim: true, maxlength: 60, default: "" },
+      keySecretEnc: { type: String, default: "" },
+      webhookSecretEnc: { type: String, default: "" },
+    },
     // Image uploads (school logos). The API secret is stored encrypted (DATA_ENCRYPTION_KEY).
     cloudinary: {
       cloudName: { type: String, trim: true, maxlength: 100, default: "" },

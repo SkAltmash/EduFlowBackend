@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-// One "Ask EduFlow" conversation, private to the member who had it (owners see the questions
+// One "Ask Zia" conversation, private to the member who had it (owners see the questions
 // in the AiQuery log, not the chats). Removed 180 days after it was last used.
 const MAX_MESSAGES = 200;
 

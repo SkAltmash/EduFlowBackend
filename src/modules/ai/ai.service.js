@@ -1,4 +1,4 @@
-// "Ask EduFlow" (chat over the school's data, with read-only tools) and "Write with AI"
+// "Ask Zia" (chat over the school's data, with read-only tools) and "Write with AI"
 // (drafts). Available when the platform has AI turned on, the school's plan includes
 // aiAssistant, and an owner or admin of the school has turned it on (their data is sent to
 // Google Gemini). Every request is logged in AiQuery and counts toward the school's monthly quota.
@@ -120,7 +120,7 @@ export function addUsage(total, meta) {
 }
 
 // ---------------------------------------------------------------------------
-// Ask EduFlow
+// Ask Zia
 // ---------------------------------------------------------------------------
 
 const ROLE_SCOPE = {
@@ -139,7 +139,7 @@ const REPLY_IN = {
 };
 
 function systemPrompt({ schoolName, userName, role, today, language = "auto" }) {
-  return `You are "Ask EduFlow", the assistant inside EduFlow, the school management app used by ${schoolName} in India.
+  return `You are Zia, the AI assistant inside Zaref Campus (people open you with "Ask Zia"). If asked your name, you are Zia. You work in Zaref Campus, the school management app used by ${schoolName} in India.
 You are talking to ${userName || "a staff member"}, ${ROLE_SCOPE[role] ?? role}. Today is ${today} (India time).
 
 How to answer:
@@ -386,7 +386,7 @@ const TONES = { friendly: "friendly", formal: "formal", firm: "polite but firm" 
 export async function write(user, { kind, language = "en", tone = "friendly", prompt, draft }) {
   const cfg = await assertReady(user);
   const tenant = await Tenant.findById(user.tenantId, { name: 1 }).lean();
-  const instruction = `You write for ${tenant?.name ?? "a school"} in India, using EduFlow. Write ${KINDS[kind]}
+  const instruction = `You write for ${tenant?.name ?? "a school"} in India, using Zaref Campus. Write ${KINDS[kind]}
 Language: ${LANGUAGES[language] ?? "English"}. Tone: ${TONES[tone] ?? "friendly"}.
 Reply with only the text itself: no preamble, no notes, no markdown headings or bold. Don't invent dates, amounts or names that weren't given; leave a [blank] instead.`;
   const ask = draft ? `Improve this draft: ${draft.slice(0, 3000)}\n\nWhat to change: ${prompt || "make it clearer"}` : prompt;

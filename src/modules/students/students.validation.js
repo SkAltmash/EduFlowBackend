@@ -67,7 +67,7 @@ export const feesPaidSchema = z.object({
   mode: z.enum(PAYMENT_MODES).default("cash"),
   reference: z.string().trim().max(100).default(""),
   note: z.string().trim().max(500).default(""),
-  // "opening": paid before EduFlow (paper receipt). "receipt": collected now, new receipt.
+  // "opening": paid before Zaref Campus (paper receipt). "receipt": collected now, new receipt.
   kind: z.enum(["opening", "receipt"]).default("opening"),
 });
 
@@ -75,7 +75,7 @@ export const createStudentWithFeesSchema = createStudentSchema.extend({ feesPaid
 
 /**
  * Fee columns in an import file (rupees as typed in Excel): "Fees paid", "Fees paid date",
- * "Payment mode", "Fees note". Recorded as paid before EduFlow.
+ * "Payment mode", "Fees note". Recorded as paid before Zaref Campus.
  */
 export const importFeesSchema = z.object({
   feesPaid: z

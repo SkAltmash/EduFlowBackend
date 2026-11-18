@@ -56,7 +56,7 @@ export function verifyCode(secret, code, now = Date.now()) {
   return [-1, 0, 1].some((d) => crypto.timingSafeEqual(Buffer.from(codeAt(secret, step + d)), Buffer.from(c)));
 }
 
-export const otpauthUrl = (secret, account, issuer = "EduFlow") =>
+export const otpauthUrl = (secret, account, issuer = "Zaref Campus") =>
   `otpauth://totp/${encodeURIComponent(`${issuer}:${account}`)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
 
 export { codeAt as _codeAt };

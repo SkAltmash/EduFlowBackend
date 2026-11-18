@@ -169,7 +169,7 @@ export async function dailySummary(user, { language = "en", refresh = false }) {
     const r = await generate(cfg, {
       contents: `SUMMARY_FACTS: ${JSON.stringify(facts)}`,
       config: {
-        systemInstruction: `You write today's short briefing for ${member?.name?.split(" ")[0] ?? "a staff member"} (${user.role}) on the EduFlow dashboard of ${tenant?.name ?? "a school"} in India.
+        systemInstruction: `You write today's short briefing for ${member?.name?.split(" ")[0] ?? "a staff member"} (${user.role}) on the Zaref Campus dashboard of ${tenant?.name ?? "a school"} in India.
 From the facts, choose the 3 to 5 most useful points for today, most urgent first: problems (attendance not marked, students absent again and again, overdue fees, weak test results) before good news. Skip anything that's zero or empty.
 Each point: tone ("bad" needs action now, "warn" worth checking, "good" good news, "info" neutral); title of at most 6 words; detail of one sentence (at most 25 words) with the exact numbers and names from the facts; link: one of ${LINKS.join(", ")} that fits; ask: a short follow-up question the user could ask the assistant to see the details.
 headline: one short, friendly sentence summing up today.

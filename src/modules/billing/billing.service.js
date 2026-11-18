@@ -1,4 +1,4 @@
-// Schools paying for their EduFlow plan online (Razorpay): the plans on offer, checkout, and
+// Schools paying for their Zaref Campus plan online (Razorpay): the plans on offer, checkout, and
 // applying a paid order to the school's subscription. A paid order is applied exactly once,
 // whether the browser's confirmation or Razorpay's webhook arrives first.
 import AuditLog from "../../models/AuditLog.js";
@@ -38,11 +38,11 @@ export async function overview(user) {
 /** Starts a payment: a Razorpay order for the plan's monthly or yearly price. */
 export async function checkout(user, { planId, cycle }) {
   const cfg = await razorpayConfig();
-  if (!cfg.enabled) throw AppError.badRequest("Online payment isn't set up yet. Contact EduFlow support to pay.", "PAYMENTS_OFF");
+  if (!cfg.enabled) throw AppError.badRequest("Online payment isn't set up yet. Contact Zaref Campus support to pay.", "PAYMENTS_OFF");
   const plan = await PlatformPlan.findOne({ _id: planId, archived: false }).lean();
   if (!plan) throw AppError.badRequest("Choose a plan", "INVALID_PLAN");
   const amount = cycle === "yearly" ? plan.priceYearly : plan.priceMonthly;
-  if (!amount) throw AppError.badRequest(`The ${plan.name} plan has no ${cycle} price yet. Contact EduFlow support.`, "PLAN_NO_PRICE");
+  if (!amount) throw AppError.badRequest(`The ${plan.name} plan has no ${cycle} price yet. Contact Zaref Campus support.`, "PLAN_NO_PRICE");
   const [tenant, member] = await Promise.all([Tenant.findById(user.tenantId, { name: 1 }).lean(), User.findById(user.id, { name: 1, email: 1, phone: 1 }).lean()]);
   const order = await createOrder(cfg, {
     amount,
@@ -86,7 +86,7 @@ export async function confirm(user, { orderId, paymentId, signature }) {
   const cfg = await razorpayConfig();
   const order = await BillingOrder.findOne({ razorpayOrderId: orderId, tenantId: user.tenantId }).lean();
   if (!order) throw AppError.notFound("Payment not found", "PAYMENT_NOT_FOUND");
-  if (!cfg.keySecret || !checkoutSignatureOk(cfg, orderId, paymentId, signature)) throw AppError.badRequest("We couldn't verify this payment. If money was taken, contact EduFlow support with the payment ID.", "PAYMENT_UNVERIFIED");
+  if (!cfg.keySecret || !checkoutSignatureOk(cfg, orderId, paymentId, signature)) throw AppError.badRequest("We couldn't verify this payment. If money was taken, contact Zaref Campus support with the payment ID.", "PAYMENT_UNVERIFIED");
   await markPaid(order, paymentId, "checkout");
   return overview(user);
 }
@@ -106,7 +106,7 @@ export async function webhook(rawBody, signature) {
   const orderId = payment?.order_id ?? event.payload?.order?.entity?.id;
   if (!orderId || !payment?.id) return { ok: true, ignored: true };
   const order = await BillingOrder.findOne({ razorpayOrderId: orderId }).lean();
-  // Payments for something other than an EduFlow plan (or an order we don't know) are ignored
+  // Payments for something other than a Zaref Campus plan (or an order we don't know) are ignored
   if (!order || payment.amount !== order.amount) return { ok: true, ignored: true };
   const applied = await markPaid(order, payment.id, "webhook");
   return { ok: true, applied };

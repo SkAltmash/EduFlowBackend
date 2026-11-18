@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-// A school paying for an EduFlow plan online: one Razorpay order, from checkout until it's paid.
+// A school paying for a Zaref Campus plan online: one Razorpay order, from checkout until it's paid.
 const billingOrderSchema = new mongoose.Schema(
   {
     tenantId: { type: mongoose.Schema.Types.ObjectId, ref: "Tenant", required: true },

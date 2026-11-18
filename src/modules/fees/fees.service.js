@@ -533,7 +533,7 @@ export async function deleteInvoice(tenantId, id) {
 /**
  * Records a payment and applies it to the student's dues (given allocations, or oldest due
  * first), all in one transaction with the receipt number. Whatever isn't needed for dues
- * stays as the student's advance. `kind: "opening"` records fees paid before EduFlow.
+ * stays as the student's advance. `kind: "opening"` records fees paid before Zaref Campus.
  */
 export async function createPayment(tenantId, user, data) {
   const { studentId, amount, date, mode, reference, note, allocations, kind = "receipt" } = data;
@@ -585,7 +585,7 @@ export async function createPayment(tenantId, user, data) {
       }
     }
 
-    // Fees paid before EduFlow are numbered separately so EduFlow receipts stay in sequence
+    // Fees paid before Zaref Campus are numbered separately so Zaref Campus receipts stay in sequence
     const opening = kind === "opening";
     const seq = await Counter.next(tenantId, opening ? "opening" : "receipt", session);
     const prefix = opening ? "OB" : await receiptPrefix(tenantId, session);
@@ -668,7 +668,7 @@ export async function listPayments(tenantId, { page, limit, ...filters }) {
     Payment.find(filter).sort({ date: -1, createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
     Payment.countDocuments(filter),
     Payment.aggregate([
-      // Totals are money collected in EduFlow: fees paid before EduFlow are listed but only
+      // Totals are money collected in Zaref Campus: fees paid before Zaref Campus are listed but only
       // added up when that's what's being looked at
       { $match: { kind: { $ne: "opening" }, ...filter, tenantId: oid(tenantId), "voided.at": { $exists: false } } },
       { $group: { _id: null, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
@@ -719,7 +719,7 @@ export async function getReceipt(tenantId, id) {
 
 export async function summary(tenantId, { from, to, today = utcToday() }) {
   const tid = oid(tenantId);
-  // Collected in EduFlow: fees paid before EduFlow ("opening") don't count for their date
+  // Collected in Zaref Campus: fees paid before Zaref Campus ("opening") don't count for their date
   const paid = { tenantId: tid, "voided.at": { $exists: false }, kind: { $ne: "opening" } };
 
   const [collected, byMode, byDay, dues, byClass, upcoming, recent] = await Promise.all([

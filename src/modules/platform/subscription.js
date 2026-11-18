@@ -12,7 +12,7 @@ const DAY_MS = 86_400_000;
 
 const DEFAULT_PLANS = [
   { name: "Basic", description: "Students, attendance, fees, tests and WhatsApp click-to-send.", priceMonthly: 99900, priceYearly: 999000, studentLimit: 300, features: { whatsappApi: false, homework: true, timetable: true, performance: true }, isDefault: true, order: 1 },
-  { name: "Pro", description: "Everything, plus automatic WhatsApp and unlimited students.", priceMonthly: 199900, priceYearly: 1999000, studentLimit: 0, features: { whatsappApi: true, homework: true, timetable: true, performance: true, aiAssistant: true }, order: 2, popular: true, highlights: ["Ask EduFlow AI anything, in English, Hindi or Marathi", "Report-card remarks and presentations written for you", "Fee reminders sent automatically on WhatsApp"] },
+  { name: "Pro", description: "Everything, plus automatic WhatsApp and unlimited students.", priceMonthly: 199900, priceYearly: 1999000, studentLimit: 0, features: { whatsappApi: true, homework: true, timetable: true, performance: true, aiAssistant: true }, order: 2, popular: true, highlights: ["Ask Zia anything, in English, Hindi or Marathi", "Report-card remarks and presentations written for you", "Fee reminders sent automatically on WhatsApp"] },
 ];
 
 /** Creates the starting plans the first time they're needed. */

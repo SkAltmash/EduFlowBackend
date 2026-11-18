@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-// Money a school paid for EduFlow (recorded by a super admin, or later by a gateway).
+// Money a school paid for Zaref Campus (recorded by a super admin, or later by a gateway).
 const subscriptionPaymentSchema = new mongoose.Schema(
   {
     tenantId: { type: mongoose.Schema.Types.ObjectId, ref: "Tenant", required: true },

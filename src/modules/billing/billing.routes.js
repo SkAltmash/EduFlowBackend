@@ -20,7 +20,7 @@ billingRouter.post(
   async (req, res) => res.json(await billing.confirm(req.user, req.body))
 );
 
-/** Razorpay → EduFlow (the body arrives raw, for the signature check). */
+/** Razorpay → Zaref Campus (the body arrives raw, for the signature check). */
 export const billingWebhookRouter = Router();
 billingWebhookRouter.post("/", async (req, res) => res.json(await billing.webhook(req.body, req.get("x-razorpay-signature"))));
 

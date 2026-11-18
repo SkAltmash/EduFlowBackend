@@ -30,7 +30,7 @@ const role = z.enum(Object.values(ROLES), { error: "Choose a role" });
 export const addMemberSchema = z.object({
   email,
   role,
-  // Only used when the email has no EduFlow account yet
+  // Only used when the email has no Zaref Campus account yet
   name: z.string().trim().min(2, "Name must be at least 2 characters").max(100).optional(),
   password: strongPassword.optional(),
 });

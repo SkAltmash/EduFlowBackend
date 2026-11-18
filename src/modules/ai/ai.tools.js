@@ -55,7 +55,7 @@ const TOOLS = [
   {
     name: "how_to",
     roles: null,
-    description: "Exact steps for doing something in EduFlow (adding students, fee plans, collecting fees, tests, report cards, promotion, staff, WhatsApp, notices, presentations…). Use it for every 'how do I…' question instead of guessing.",
+    description: "Exact steps for doing something in Zaref Campus (adding students, fee plans, collecting fees, tests, report cards, promotion, staff, WhatsApp, notices, presentations…). Use it for every 'how do I…' question instead of guessing.",
     parameters: { type: "object", properties: { topic: { type: "string", description: "What the user wants to do, in a few English words (translate if asked in Hindi/Marathi)" } }, required: ["topic"] },
     async run(ctx, a) {
       return findGuides(ctx.role, a.topic);

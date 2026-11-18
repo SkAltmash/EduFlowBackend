@@ -106,9 +106,9 @@ export function geminiError(err) {
   if (err?.name === "AbortError") return new AppError(499, "Stopped.", "AI_ABORTED");
   if (err instanceof ApiError) {
     console.error(`Gemini error ${err.status}: ${String(err.message).slice(0, 400)}`);
-    if (err.status === 400 && /api key/i.test(err.message)) return new AppError(502, "The AI service rejected the API key. Ask EduFlow support to check it.", "AI_KEY_INVALID");
-    if (err.status === 401 || err.status === 403) return new AppError(502, "The AI service rejected the API key. Ask EduFlow support to check it.", "AI_KEY_INVALID");
-    if (err.status === 404) return new AppError(502, "The AI model set in the console doesn't exist. Ask EduFlow support to check it.", "AI_MODEL_INVALID");
+    if (err.status === 400 && /api key/i.test(err.message)) return new AppError(502, "The AI service rejected the API key. Ask Zaref Campus support to check it.", "AI_KEY_INVALID");
+    if (err.status === 401 || err.status === 403) return new AppError(502, "The AI service rejected the API key. Ask Zaref Campus support to check it.", "AI_KEY_INVALID");
+    if (err.status === 404) return new AppError(502, "The AI model set in the console doesn't exist. Ask Zaref Campus support to check it.", "AI_MODEL_INVALID");
     if (err.status === 429) return new AppError(503, "The AI service is busy right now. Try again in a minute.", "AI_BUSY");
     if (err.status >= 500) return new AppError(503, "The AI service is having trouble right now. Try again in a minute.", "AI_UNAVAILABLE");
     return new AppError(502, `The AI service couldn't answer (${err.message.slice(0, 160)}).`, "AI_FAILED");

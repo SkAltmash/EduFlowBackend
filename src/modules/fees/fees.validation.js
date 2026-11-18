@@ -81,7 +81,7 @@ export const createPaymentSchema = z.object({
   mode: z.enum(PAYMENT_MODES, { error: `Mode must be one of: ${PAYMENT_MODES.join(", ")}` }),
   reference: z.string().trim().max(100).default(""),
   note: z.string().trim().max(500).default(""),
-  // "opening": paid before the school used EduFlow (not counted in collections)
+  // "opening": paid before the school used Zaref Campus (not counted in collections)
   kind: z.enum(["receipt", "opening"]).default("receipt"),
   // Omit to apply the payment to the oldest dues first; whatever isn't applied is advance
   allocations: z

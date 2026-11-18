@@ -61,7 +61,7 @@ export async function authenticate(req, res, next) {
     ...(payload.impersonation ? { isImpersonating: true } : {}),
   };
 
-  // A super admin looking around doesn't count as the school using EduFlow, and isn't blocked
+  // A super admin looking around doesn't count as the school using Zaref Campus, and isn't blocked
   if (!payload.impersonation) {
     recordActivity(payload.tenantId);
     // Expired or suspended: everything stays readable, nothing can change (own account excepted)
@@ -73,8 +73,8 @@ export async function authenticate(req, res, next) {
         throw new AppError(
           402,
           access.status === "suspended"
-            ? "This school's EduFlow account is on hold. Contact EduFlow support to restore it."
-            : "Your EduFlow plan has ended, so the app is read-only. Renew to add or change anything.",
+            ? "This school's Zaref Campus account is on hold. Contact Zaref Campus support to restore it."
+            : "Your Zaref Campus plan has ended, so the app is read-only. Renew to add or change anything.",
           "SUBSCRIPTION_READONLY"
         );
       }

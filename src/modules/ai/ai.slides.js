@@ -517,7 +517,7 @@ export async function translateDeck(user, id, { language }) {
 /** A short-lived signature so the browser uploads a picture straight to Cloudinary. */
 export async function imageUploadSignature(user) {
   const cfg = await cloudinaryConfig();
-  if (!cfg) throw AppError.badRequest("Picture uploads aren't set up on EduFlow yet. Contact support.", "UPLOADS_NOT_CONFIGURED");
+  if (!cfg) throw AppError.badRequest("Picture uploads aren't set up on Zaref Campus yet. Contact support.", "UPLOADS_NOT_CONFIGURED");
   const params = {
     allowed_formats: "png,jpg,jpeg,webp",
     folder: `${cfg.folder}/slides/${user.tenantId}`,
@@ -591,7 +591,7 @@ export async function generateSlideImage(user, id, index, { prompt }) {
   const slide = deck.slides[index];
   if (!slide) throw AppError.notFound("Slide not found", "AI_DECK_NO_SLIDE");
   const settings = await aiConfig();
-  if (!imagesReady(settings)) throw AppError.badRequest("AI pictures aren't turned on yet. Upload a picture instead, or ask EduFlow support.", "AI_IMAGES_OFF");
+  if (!imagesReady(settings)) throw AppError.badRequest("AI pictures aren't turned on yet. Upload a picture instead, or ask Zaref Campus support.", "AI_IMAGES_OFF");
   const cfg = await assertReady(user, UNITS.image);
   const describe = prompt?.trim() || `${slide.title}${slide.bullets?.length ? `: ${slide.bullets.slice(0, 3).join(", ")}` : ""}`;
   const url = await drawPicture(user, cfg, describe);

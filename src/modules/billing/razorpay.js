@@ -1,4 +1,4 @@
-// Razorpay for EduFlow plan payments: keys come from Console → Settings → Payments (secrets
+// Razorpay for Zaref Campus plan payments: keys come from Console → Settings → Payments (secrets
 // stored encrypted). Orders are created here, paid in Razorpay Checkout in the browser, and
 // confirmed by the checkout's signature and by Razorpay's webhook.
 import crypto from "node:crypto";

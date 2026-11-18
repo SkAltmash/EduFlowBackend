@@ -88,7 +88,7 @@ export async function checkUploadPermission({ cloudName, apiKey, apiSecret, fold
 /** Uploads an image from the server (e.g. one the AI made), returning its https URL. */
 export async function uploadDataUri(dataUri, folder) {
   const cfg = await cloudinaryConfig();
-  if (!cfg) throw AppError.badRequest("Image uploads aren't set up on EduFlow yet. Contact support.", "UPLOADS_NOT_CONFIGURED");
+  if (!cfg) throw AppError.badRequest("Image uploads aren't set up on Zaref Campus yet. Contact support.", "UPLOADS_NOT_CONFIGURED");
   const timestamp = Math.floor(Date.now() / 1000);
   const params = { folder: `${cfg.folder}/${folder}`, timestamp };
   const body = new URLSearchParams({ ...params, file: dataUri, api_key: cfg.apiKey, signature: sign(params, cfg.apiSecret) });

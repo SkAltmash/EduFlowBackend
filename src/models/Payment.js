@@ -19,7 +19,7 @@ const paymentSchema = new mongoose.Schema(
     },
     date: { type: String, required: true, match: /^\d{4}-\d{2}-\d{2}$/ },
     amount: { type: Number, required: true, min: 1 },
-    // "receipt": collected in EduFlow. "opening": paid before the school used EduFlow
+    // "receipt": collected in Zaref Campus. "opening": paid before the school used Zaref Campus
     // (already has a paper receipt), so it doesn't count in collections for its date.
     kind: { type: String, enum: ["receipt", "opening"], default: "receipt" },
     mode: { type: String, enum: PAYMENT_MODES, required: true },

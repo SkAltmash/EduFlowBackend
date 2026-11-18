@@ -140,7 +140,7 @@ const logoPublicId = (folder, tenantId) => `${folder}/schools/${tenantId}/logo`;
 /** A one-off signed upload for this school's logo slot (same public id, so a new logo replaces the old one). */
 export async function logoUploadSignature(tenantId) {
   const cfg = await cloudinaryConfig();
-  if (!cfg) throw AppError.badRequest("Logo upload isn't set up on EduFlow yet. Contact support.", "UPLOADS_NOT_CONFIGURED");
+  if (!cfg) throw AppError.badRequest("Logo upload isn't set up on Zaref Campus yet. Contact support.", "UPLOADS_NOT_CONFIGURED");
   const params = {
     allowed_formats: "png,jpg,jpeg,webp",
     invalidate: "true",
@@ -159,7 +159,7 @@ export async function logoUploadSignature(tenantId) {
 /** Saves the uploaded logo, after checking it is this school's image on our Cloudinary account. */
 export async function saveLogo(actor, ctx, { url }) {
   const cfg = await cloudinaryConfig();
-  if (!cfg) throw AppError.badRequest("Logo upload isn't set up on EduFlow yet. Contact support.", "UPLOADS_NOT_CONFIGURED");
+  if (!cfg) throw AppError.badRequest("Logo upload isn't set up on Zaref Campus yet. Contact support.", "UPLOADS_NOT_CONFIGURED");
   const publicId = logoPublicId(cfg.folder, actor.tenantId);
   const expected = new RegExp(`^https://res\\.cloudinary\\.com/${cfg.cloudName}/image/upload/(v\\d+/)?${publicId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.(png|jpe?g|webp)$`);
   if (!expected.test(url)) throw AppError.badRequest("That isn't this school's uploaded logo", "INVALID_LOGO_URL");
@@ -213,7 +213,7 @@ function revokeSessions(userId, tenantId) {
 }
 
 /**
- * Adds a staff member. An existing EduFlow account (same email) is simply given access
+ * Adds a staff member. An existing Zaref Campus account (same email) is simply given access
  * and keeps its password; otherwise a new account is created with the password given.
  */
 export async function addMember(actor, ctx, { email, role, name, password }) {

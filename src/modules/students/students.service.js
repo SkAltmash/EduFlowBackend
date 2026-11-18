@@ -332,7 +332,7 @@ export async function importStudents(tenantId, userId, { students: rows, onDupli
   return { total: rows.length, created, updated, skipped, failed, feesRecorded };
 }
 
-/** Saves "Fees paid" from an import as fees paid before EduFlow; they become each student's advance. */
+/** Saves "Fees paid" from an import as fees paid before Zaref Campus; they become each student's advance. */
 async function recordImportedFees(tenantId, userId, insertedDocs, rows) {
   const feesByNo = new Map(rows.filter((v) => v.fees?.feesPaid > 0).map((v) => [v.data.admissionNo, v.fees]));
   const students = insertedDocs.filter((d) => feesByNo.has(d.admissionNo));
@@ -357,7 +357,7 @@ async function recordImportedFees(tenantId, userId, insertedDocs, rows) {
       date: f.feesPaidDate || today,
       amount: f.feesPaid,
       mode: f.feesPaidMode || "cash",
-      note: f.feesNote || "Paid before EduFlow (imported)",
+      note: f.feesNote || "Paid before Zaref Campus (imported)",
       allocations: [],
       receivedBy: userId,
       receivedByName,

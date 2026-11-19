@@ -296,7 +296,7 @@ const TOOLS = [
               date: p.date,
               amount: rupees(p.amount),
               mode: p.mode,
-              ...(p.kind === "opening" ? { paidBeforeEduFlow: true } : {}),
+              ...(p.kind === "opening" ? { paidBeforeJoining: true } : {}),
               ...(p.voided?.at ? { voided: true } : {}),
               link: receiptLink(p._id),
             })),
